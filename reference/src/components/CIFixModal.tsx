@@ -33,6 +33,7 @@ export default function CIFixModal({
     handleProviderChange,
     modelOptions,
     loadingOpenCodeModels,
+    availableProviders,
   } = useProviderModelSelection();
 
   if (!isOpen) return null;
@@ -82,6 +83,7 @@ export default function CIFixModal({
             handleProviderChange={handleProviderChange}
             modelOptions={modelOptions}
             loadingOpenCodeModels={loadingOpenCodeModels}
+            availableProviders={availableProviders}
             disabled={isSubmitting}
             testIdPrefix="ci-fix"
           />

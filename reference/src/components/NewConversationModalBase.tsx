@@ -75,6 +75,7 @@ export default function NewConversationModalBase<TEntity = unknown>({
     handleProviderChange,
     modelOptions,
     loadingOpenCodeModels,
+    availableProviders,
     reset: resetProviderModel,
   } = useProviderModelSelection();
   const { isConnected } = useWebSocket();
@@ -239,6 +240,7 @@ export default function NewConversationModalBase<TEntity = unknown>({
             handleProviderChange={handleProviderChange}
             modelOptions={modelOptions}
             loadingOpenCodeModels={loadingOpenCodeModels}
+            availableProviders={availableProviders}
             disabled={isSending}
             testIdPrefix="new-conversation"
           />

@@ -1,5 +1,9 @@
 # Dependencies
+# Both forms: the trailing-slash rule misses a `node_modules` *symlink*
+# (the worktree setup symlinks it to the main checkout), which could then be
+# staged accidentally.
 node_modules/
+node_modules
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
