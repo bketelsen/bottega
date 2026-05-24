@@ -12,7 +12,13 @@ import { PROVIDER_LABELS, type ProviderModelSelection } from '../hooks/useProvid
 interface ProviderModelPickerProps
   extends Pick<
     ProviderModelSelection,
-    'provider' | 'model' | 'setModel' | 'handleProviderChange' | 'modelOptions' | 'loadingOpenCodeModels'
+    | 'provider'
+    | 'model'
+    | 'setModel'
+    | 'handleProviderChange'
+    | 'modelOptions'
+    | 'loadingOpenCodeModels'
+    | 'availableProviders'
   > {
   disabled?: boolean;
   /** Prefix for the select `data-testid`s (e.g. 'new-conversation' → '…-provider-select'). */
@@ -29,6 +35,7 @@ export function ProviderModelPicker({
   handleProviderChange,
   modelOptions,
   loadingOpenCodeModels,
+  availableProviders,
   disabled = false,
   testIdPrefix = 'conversation',
 }: ProviderModelPickerProps) {
@@ -43,9 +50,11 @@ export function ProviderModelPicker({
           data-testid={`${testIdPrefix}-provider-select`}
           className={SELECT_CLASS}
         >
-          <option value="anthropic">{PROVIDER_LABELS.anthropic}</option>
-          <option value="openai">{PROVIDER_LABELS.openai}</option>
-          <option value="opencode">{PROVIDER_LABELS.opencode}</option>
+          {availableProviders.map((p) => (
+            <option key={p} value={p}>
+              {PROVIDER_LABELS[p]}
+            </option>
+          ))}
         </select>
       </label>
       <label className="flex items-center gap-2">

@@ -30,7 +30,7 @@ function TaskDetailPage() {
   const { projectId, taskId } = useParams<{ projectId: string; taskId: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { requireClaudeAuth, openAuthModal } = useClaudeAuth();
+  const { openAuthModal } = useClaudeAuth();
   const {
     projects,
     tasks,
@@ -159,8 +159,9 @@ function TaskDetailPage() {
   }, []);
 
   const handleResumeWorkflow = useCallback(async (resumeTaskId: number) => {
-    if (!requireClaudeAuth()) return;
-
+    // Agents run on their per-agent provider (any of the three); the server
+    // validates that provider's credentials and surfaces a clear error if
+    // they're missing — no Claude-specific gate here.
     try {
       const response = await api.tasks.resume(resumeTaskId, false);
       if (response.ok) {
@@ -184,14 +185,15 @@ function TaskDetailPage() {
       console.error('Error resuming workflow:', err);
       toast.error(`Failed to resume workflow: ${(err as Error).message}`);
     }
-  }, [requireClaudeAuth, toast]);
+  }, [toast]);
 
   // Conversation handlers
   const handleNewConversation = useCallback(() => {
     if (!task) return;
-    if (!requireClaudeAuth()) return;
+    // No Claude gate here — the modal lets the user pick any connected
+    // provider and only requires Claude auth if they choose Anthropic.
     setShowNewConversationModal(true);
-  }, [requireClaudeAuth, task]);
+  }, [task]);
 
   const handleConversationCreated = useCallback((conversation: ConversationCreated) => {
     setShowNewConversationModal(false);
@@ -217,8 +219,9 @@ function TaskDetailPage() {
   // Agent handlers
   const handleRunAgent = useCallback(async (agentType: AgentType) => {
     if (!task) return;
-    if (!requireClaudeAuth()) return;
-
+    // The agent's configured provider decides which credentials are needed.
+    // The server returns PROVIDER_CREDENTIALS_MISSING (handled below) when
+    // they're absent, so we don't gate on Claude auth up front.
     try {
       const response = await api.agentRuns.create(task.id, agentType);
 
@@ -270,7 +273,7 @@ function TaskDetailPage() {
       console.error('Error starting agent:', err);
       toast.error(`Failed to start agent: ${(err as Error).message}`);
     }
-  }, [task, requireClaudeAuth, openAuthModal, loadAgentRuns, toast]);
+  }, [task, openAuthModal, loadAgentRuns, toast]);
 
   // Loading state
   if (isLoading || isLoadingProjects || !project || !task) {

@@ -46,6 +46,7 @@ function AskQuestionModal({
     handleProviderChange,
     modelOptions,
     loadingOpenCodeModels,
+    availableProviders,
     reset: resetProviderModel,
   } = useProviderModelSelection();
 
@@ -207,6 +208,7 @@ function AskQuestionModal({
             handleProviderChange={handleProviderChange}
             modelOptions={modelOptions}
             loadingOpenCodeModels={loadingOpenCodeModels}
+            availableProviders={availableProviders}
             disabled={isSubmitting}
             testIdPrefix="ask-question"
           />

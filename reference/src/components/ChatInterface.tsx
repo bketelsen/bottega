@@ -471,7 +471,9 @@ function ChatInterface({
         return;
       }
 
-      if (!requireClaudeAuth()) {
+      // Only Anthropic conversations need a Claude OAuth token; OpenAI/OpenCode
+      // sessions authenticate with their own server-side credentials.
+      if (activeConversation?.provider === 'anthropic' && !requireClaudeAuth()) {
         return;
       }
 
@@ -486,6 +488,7 @@ function ChatInterface({
       selectedProject,
       claudeSessionId,
       isConnected,
+      activeConversation?.provider,
       requireClaudeAuth,
       sendUserCommand,
     ],
@@ -531,7 +534,9 @@ function ChatInterface({
   const handleAskUserSubmit = useCallback(
     (_formatted: unknown, structured: Record<string, string> | null) => {
       if (!openAskPanel || !isConnected || !claudeSessionId) return;
-      if (!requireClaudeAuth()) return;
+      // AskUserQuestion is Claude-only today, but gate on the provider anyway
+      // so a non-Anthropic conversation never pops the Claude-auth modal.
+      if (activeConversation?.provider === 'anthropic' && !requireClaudeAuth()) return;
       if (
         structured &&
         Object.keys(structured).length > 0 &&
