@@ -212,6 +212,8 @@ app.get('/api/streaming-sessions', authenticateToken, (req, res) => {
 });
 
 app.use(express.static(path.join(__dirname, '../public')));
+// serve the built React app (single-process production: no vite, no proxy)
+app.use(express.static(path.join(__dirname, '../dist')));
 
 app.get('/api/projects/:id/files', authenticateToken, async (req: Request, res: Response) => {
   try {
@@ -433,8 +435,14 @@ async function startServer(): Promise<void> {
 
     console.log(`${c.info('[INFO]')} Using Claude Agents SDK for Claude integration`);
     console.log(
-      `${c.info('[INFO]')} Frontend served by Vite at ${c.dim('http://localhost:' + (process.env.VITE_PORT || 5173))}`,
+      `${c.info('[INFO]')} Frontend (built) served by this server at ${c.dim('http://0.0.0.0:' + PORT)}`,
     );
+
+    // SPA history fallback: any non-/api GET returns the built index.html
+    // (Express 5 dropped bare "*" string routes; use a negative-lookahead RegExp)
+    app.get(/^(?!\/api).*/, (_req: Request, res: Response) => {
+      res.sendFile(path.join(__dirname, '../dist/index.html'));
+    });
 
     server.listen(Number(PORT), '0.0.0.0', () => {
       const appInstallPath = path.join(__dirname, '..');
