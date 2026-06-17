@@ -9,7 +9,6 @@ import { cleanupTempFiles } from './media.js';
 import { hasProjectAccess } from '../projectService.js';
 import { getProvider } from '../providers/registry.js';
 import { conversationsDb, tasksDb, agentRunsDb } from '../../database/db.js';
-import type { Provider } from '@shared/providers/types';
 
 /**
  * Abort an active session — the user clicked Stop.
@@ -70,7 +69,7 @@ export async function abortSession(sessionId: string): Promise<boolean> {
 
     try {
       const conversation = conversationsDb.getById(session.conversationId);
-      const providerName = (conversation?.provider as Provider | undefined) ?? 'anthropic';
+      const providerName = (conversation?.provider) ?? 'anthropic';
       // `sessionId` is the activeSessions key, which equals the provider
       // session id for every provider (claude session id / codex thread id /
       // opencode session id). Hand it straight to abortTurn.

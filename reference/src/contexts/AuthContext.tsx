@@ -133,7 +133,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (response.ok) {
         const success = data;
         setToken(success.token);
-        setUser(success.user as unknown as AuthenticatedUser);
+        setUser(success.user);
         localStorage.setItem('auth-token', success.token);
         if (success.user?.id) {
           loginUserToNative(success.user.id);
@@ -162,7 +162,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (response.ok) {
         const success = data;
         setToken(success.token);
-        setUser(success.user as unknown as AuthenticatedUser);
+        setUser(success.user);
         setNeedsSetup(false);
         localStorage.setItem('auth-token', success.token);
         if (success.user?.id) {

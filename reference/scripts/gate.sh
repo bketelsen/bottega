@@ -15,12 +15,12 @@ set -euo pipefail
 #   pnpm install --frozen-lockfile   &&   pnpm test:run
 # The two steps under "CI-equivalent" below are byte-for-byte that. If THOSE pass,
 # the PR's Unit Tests check will pass. Everything after is stricter-than-CI local
-# insurance (typecheck, no-JS guard) — caught here instead of after a red push.
+# insurance (typecheck, lint) — caught here instead of after a red push.
 #
-# NOTE: `pnpm lint` is intentionally NOT in this gate. CI does not run it, and the
-# repo's eslint@10 flat-config currently CRASHES (exit 2, not findings) — including it
-# would make the gate redder than CI, the opposite of "no surprises". Re-add only once
-# CI runs lint AND the eslint config is fixed.
+# `pnpm lint` (eslint) IS in this gate as beyond-CI insurance. It is error-strict but
+# warning-tolerant: eslint exits non-zero only on ERRORS, so the ~hundreds of intentional
+# `no-unsafe-*` warnings (kept for opportunistic cleanup, see eslint.config.ts) do not
+# block. CI still does not run lint; this catches lint errors locally before a push.
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."   # -> reference/
 
@@ -33,8 +33,10 @@ env -u NODE_ENV pnpm test:run
 echo "=== gate: beyond-CI — typecheck (tsc --noEmit) ==="
 env -u NODE_ENV pnpm run typecheck
 
-echo "=== gate: beyond-CI — no-JS guard (TypeScript-only invariant) ==="
-env -u NODE_ENV pnpm run guard-no-js
+# `pnpm run lint` runs the no-JS guard first via its prelint hook (prelint = pnpm
+# guard-no-js), so the TypeScript-only invariant is covered here too — no separate step.
+echo "=== gate: beyond-CI — lint (eslint; prelint runs the no-JS guard) ==="
+env -u NODE_ENV pnpm run lint
 
 echo ""
 echo "=== gate: PASSED ==="

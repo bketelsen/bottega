@@ -27,7 +27,6 @@ import type {
   UpdateUserAgentModelSettingsResponse,
 } from '../../shared/api/userAgentModelSettings.js';
 import type { ApiError } from '../../shared/api/_common.js';
-import type { AgentModelSettings } from '../../shared/types/agentModelSettings.js';
 import { PROVIDERS } from '../../shared/providers/models.js';
 import type { Provider } from '../../shared/providers/types.js';
 
@@ -52,8 +51,8 @@ router.put(
   (req: Request, res: Response<UpdateUserAgentModelSettingsResponse | ApiError>) => {
     const body = req.validated!.body as PutUserAgentModelSettingsBody;
     try {
-      saveAgentModelSettings(req.user!.id, body as AgentModelSettings);
-      res.json({ settings: body as AgentModelSettings });
+      saveAgentModelSettings(req.user!.id, body);
+      res.json({ settings: body });
     } catch (error) {
       console.error('Error saving user agent model settings:', error);
       res.status(500).json({ error: 'Failed to save agent model settings' });

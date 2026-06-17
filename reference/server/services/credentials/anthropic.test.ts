@@ -52,7 +52,7 @@ describe('anthropicCredentialStore', () => {
       ANTHROPIC_API_KEY: undefined,
       ANTHROPIC_AUTH_TOKEN: undefined,
       CLAUDE_CODE_OAUTH_TOKEN: 'abc',
-    } as never);
+    });
     const env = anthropicCredentialStore.buildSdkEnv(42);
     expect(env['CLAUDE_CODE_OAUTH_TOKEN']).toBe('abc');
   });

@@ -101,7 +101,6 @@ import {
   generateRefinementMessage
 } from '../constants/agentPrompts.js';
 import { getWorktreeProjectPath, worktreeExists } from './worktree.js';
-import { validateClaudeCredentials } from './claudeCredentials.js';
 import { loadAgentModelSettings } from './agentModelSettings.js';
 
 describe('agentRunner', () => {

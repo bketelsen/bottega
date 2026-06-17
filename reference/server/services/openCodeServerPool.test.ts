@@ -42,7 +42,7 @@ class FakeChild extends EventEmitter {
     if (this.exitCode === null) {
       this.exitCode = 0;
       this.signalCode =
-        typeof signal === 'string' ? signal : ('SIGTERM' as NodeJS.Signals);
+        typeof signal === 'string' ? signal : ('SIGTERM');
       // simulate async exit
       setImmediate(() => this.emit('exit', null, this.signalCode));
     }
@@ -174,7 +174,7 @@ describe('openCodeServerPool', () => {
     expect(rec.env['OPENCODE_SERVER_PASSWORD']!.length).toBeGreaterThan(20);
     expect(rec.env['OPENCODE_SERVER_USERNAME']).toBe('opencode');
     const expectedAuth = `Basic ${Buffer.from(`opencode:${rec.env['OPENCODE_SERVER_PASSWORD']}`).toString('base64')}`;
-    expect((handle.client as unknown as { __test_headers: Record<string, string> }).__test_headers!['authorization']).toBe(expectedAuth);
+    expect((handle.client as unknown as { __test_headers: Record<string, string> }).__test_headers['authorization']).toBe(expectedAuth);
   });
 
   it('passes the per-user XDG dirs through to the spawned process env', async () => {

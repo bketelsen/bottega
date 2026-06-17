@@ -18,6 +18,9 @@ export default tseslint.config(
       'coverage/**',
       'public/**',
       '**/*.min.js',
+      // Self-contained example sub-apps (own package.json/tsconfig/next.config);
+      // not in the root tsconfig "include", so type-aware rules can't type them.
+      'examples/**',
     ],
   },
 
@@ -38,7 +41,14 @@ export default tseslint.config(
     },
     rules: {
       '@typescript-eslint/no-floating-promises': 'error',
-      '@typescript-eslint/switch-exhaustiveness-check': 'error',
+      '@typescript-eslint/switch-exhaustiveness-check': [
+        'error',
+        // A deliberate `default` clause counts as exhaustive even on union
+        // discriminants (e.g. the opencode event mapper intentionally no-ops
+        // unhandled event types for forward-compat). Avoids listing every
+        // union member when an explicit default already handles the rest.
+        { considerDefaultExhaustiveForUnions: true },
+      ],
     },
   },
 

@@ -223,10 +223,10 @@ export async function sendCodexMessage(
     projectPath = conversation.session_path;
   } else {
     projectPath = taskWithProject.repo_folder_path;
-    if (await worktreeExists(projectPath, taskId!)) {
+    if (await worktreeExists(projectPath, taskId)) {
       projectPath = getWorktreeProjectPath(
         projectPath,
-        taskId!,
+        taskId,
         taskWithProject.subproject_path,
       );
     }
@@ -271,7 +271,7 @@ export async function sendCodexMessage(
   };
 
   activeSessions.set(resumeSessionId, {
-    instance: run as unknown,
+    instance: run,
     abortController,
     startTime: Date.now(),
     status: 'active',
@@ -410,7 +410,7 @@ export async function startCodexConversation(
     }, 60000);
 
     const ctx: StreamingContext = {
-      conversationId: conversationId!,
+      conversationId: conversationId,
       taskId,
       claudeSessionId: null,
       userId,
@@ -424,7 +424,7 @@ export async function startCodexConversation(
     // baseline path. The breakdown capability is off for Codex so
     // `onAssistant` is never called.
     const contextUsageTracker = createContextUsageTracker({
-      conversationId: conversationId!,
+      conversationId: conversationId,
       broadcastFn,
     });
 
@@ -445,24 +445,24 @@ export async function startCodexConversation(
           ) {
             const sid = unified.providerSessionId;
             ctx.claudeSessionId = sid;
-            conversationsDb.updateClaudeId(conversationId!, sid);
-            conversationsDb.updateProviderSessionId(conversationId!, sid);
-            conversationsDb.updateSessionPath(conversationId!, projectPath);
+            conversationsDb.updateClaudeId(conversationId, sid);
+            conversationsDb.updateProviderSessionId(conversationId, sid);
+            conversationsDb.updateSessionPath(conversationId, projectPath);
             activeSessions.set(sid, {
-              instance: run as unknown,
+              instance: run,
               abortController,
               startTime: Date.now(),
               status: 'active',
               tempImagePaths,
               tempDir,
-              conversationId: conversationId!,
+              conversationId: conversationId,
               taskId,
               projectId: taskWithProject.project_id,
               userId: userId ?? null,
             });
 
             generateConversationTitle(
-              conversationId!,
+              conversationId,
               message,
               broadcastFn,
               userId,
@@ -473,12 +473,12 @@ export async function startCodexConversation(
             handleStreamingStarted(ctx);
 
             if (broadcastFn) {
-              broadcastFn(conversationId!, {
+              broadcastFn(conversationId, {
                 type: 'conversation-created',
-                conversationId: conversationId!,
+                conversationId: conversationId,
                 claudeSessionId: sid,
               });
-              broadcastFn(conversationId!, {
+              broadcastFn(conversationId, {
                 type: 'session-created',
                 sessionId: sid,
               });
@@ -487,7 +487,7 @@ export async function startCodexConversation(
               broadcastToTaskSubscribersFn(taskId, {
                 type: 'conversation-added',
                 conversation: {
-                  id: conversationId!,
+                  id: conversationId,
                   task_id: taskId,
                   claude_conversation_id: sid,
                   created_at: new Date().toISOString(),
@@ -497,10 +497,10 @@ export async function startCodexConversation(
 
             clearTimeout(timeout);
             resolved = true;
-            resolve({ conversationId: conversationId!, claudeSessionId: sid });
+            resolve({ conversationId: conversationId, claudeSessionId: sid });
           }
 
-          broadcastUnified(broadcastFn, conversationId!, unified);
+          broadcastUnified(broadcastFn, conversationId, unified);
 
           // Mirror to the messages table so the conversation reloads
           // with full history. The synthetic user message arrives
@@ -552,7 +552,7 @@ export async function startCodexConversation(
         }
 
         if (broadcastFn) {
-          broadcastFn(conversationId!, {
+          broadcastFn(conversationId, {
             type: 'claude-complete',
             sessionId: ctx.claudeSessionId,
             exitCode: 0,
@@ -578,7 +578,7 @@ export async function startCodexConversation(
         }
         if (broadcastFn) {
           const errMsg = error instanceof Error ? error.message : String(error);
-          broadcastFn(conversationId!, {
+          broadcastFn(conversationId, {
             type: 'claude-error',
             error: errMsg,
           });

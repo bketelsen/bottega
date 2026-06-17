@@ -8,7 +8,7 @@
 // flips the switch.
 
 import { Codex } from '@openai/codex-sdk';
-import type { ThreadEvent, Thread } from '@openai/codex-sdk';
+import type { Thread } from '@openai/codex-sdk';
 
 import { mapEvent } from './mapEvent.js';
 import { buildCodexThreadOptions } from './codexOptionsBuilder.js';
@@ -64,7 +64,7 @@ async function* streamUnified(
   capturePid((streamed as unknown as { pid?: number }).pid ?? null);
 
   for await (const event of streamed.events) {
-    const e = event as ThreadEvent;
+    const e = event;
     if (e.type === 'thread.started' && providerSessionId === null) {
       providerSessionId = e.thread_id;
       resolveSessionId(e.thread_id);
@@ -111,7 +111,7 @@ export class CodexProvider implements LlmProvider {
     const providerSessionId$ = new Promise<string>((resolve) => {
       resolveSessionId = resolve;
     });
-    providerSessionId$.then((id) => {
+    void providerSessionId$.then((id) => {
       ACTIVE_SESSIONS.set(id, { thread, abortController });
     });
 
@@ -129,7 +129,7 @@ export class CodexProvider implements LlmProvider {
       get pid() {
         return pid;
       },
-    } as ProviderRunResult;
+    };
   }
 
   async loadTranscript(options: LoadTranscriptOptions): Promise<UnifiedMessage[]> {

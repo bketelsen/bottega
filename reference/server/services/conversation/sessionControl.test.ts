@@ -187,7 +187,7 @@ describe('abortSession', () => {
       tempImagePaths: [],
       tempDir: null,
     } as never);
-    vi.mocked(conversationsDb.getById).mockReturnValue(undefined as never);
+    vi.mocked(conversationsDb.getById).mockReturnValue(undefined);
     vi.mocked(agentRunsDb.getByConversationId).mockReturnValue(undefined);
 
     await abortSession('s4');

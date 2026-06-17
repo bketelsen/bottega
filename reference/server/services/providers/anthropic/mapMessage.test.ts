@@ -4,19 +4,17 @@ import { mapMessage } from './mapMessage.js';
 import type { SDKMessage } from '@shared/sdk/transcript';
 import type {
   UnifiedAssistantMessage,
-  UnifiedAssistantThinkingMessage,
   UnifiedResultMessage,
   UnifiedStreamDeltaMessage,
   UnifiedSystemMessage,
   UnifiedToolResultMessage,
-  UnifiedToolUseMessage,
   UnifiedUserMessage,
 } from '@shared/providers/types';
 
 const SID = 'session-abc-123';
 
 function asSdk(raw: unknown): SDKMessage {
-  return raw as unknown as SDKMessage;
+  return raw as SDKMessage;
 }
 
 describe('AnthropicProvider mapMessage', () => {
@@ -79,11 +77,11 @@ describe('AnthropicProvider mapMessage', () => {
     expect(out[0]!.type).toBe('assistant');
     expect((out[0] as UnifiedAssistantMessage).text).toBe('before tool after tool');
 
-    const thinking = out.find((m) => m.type === 'assistant_thinking') as UnifiedAssistantThinkingMessage | undefined;
+    const thinking = out.find((m) => m.type === 'assistant_thinking');
     expect(thinking).toBeDefined();
     expect(thinking!.text).toBe('pondering');
 
-    const toolUse = out.find((m) => m.type === 'tool_use') as UnifiedToolUseMessage | undefined;
+    const toolUse = out.find((m) => m.type === 'tool_use');
     expect(toolUse).toBeDefined();
     expect(toolUse!.toolName).toBe('Bash');
     expect(toolUse!.toolUseId).toBe('tool_xyz');

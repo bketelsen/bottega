@@ -388,7 +388,7 @@ describe('OpenCodeProvider', () => {
     });
     const collected: { type: string }[] = [];
     for await (const m of run.events) {
-      collected.push(m as { type: string });
+      collected.push(m);
     }
     // Only the synthetic user + the session.idle result — no orphan tool_use/tool_result.
     expect(collected.map((m) => m.type)).toEqual(['user', 'result']);

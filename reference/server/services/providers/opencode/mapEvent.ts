@@ -25,13 +25,11 @@ import type {
   EventSessionError,
   EventSessionIdle,
   AssistantMessage,
-  Part,
   TextPart,
   ReasoningPart,
   ToolPart,
   FilePart,
   StepFinishPart,
-  Message,
 } from '@opencode-ai/sdk';
 import type {
   UnifiedAssistantMessage,
@@ -237,7 +235,7 @@ export function createOpenCodeEventMapper(
   }
 
   function mapPart(event: EventMessagePartUpdated): UnifiedMessage[] {
-    const part = event.properties.part as Part;
+    const part = event.properties.part;
     switch (part.type) {
       case 'text':
         return mapTextPart(part, event);
@@ -263,7 +261,7 @@ export function createOpenCodeEventMapper(
   }
 
   function mapMessageUpdated(event: EventMessageUpdated): UnifiedMessage[] {
-    const info = event.properties.info as Message;
+    const info = event.properties.info;
     if (info.role === 'user') {
       // The synthetic user message is emitted by the orchestrator; do not echo.
       return [];
