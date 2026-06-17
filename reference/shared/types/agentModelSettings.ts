@@ -17,6 +17,8 @@ import {
   OPENAI_EFFORTS,
   OPENCODE_MODELS,
   OPENCODE_EFFORTS,
+  COPILOT_MODELS,
+  COPILOT_EFFORTS,
   isModelForProvider,
   isEffortForProvider,
 } from '../providers/models.js';
@@ -75,12 +77,14 @@ const OPENAI_SEED: { model: string; effort: string } = { model: 'gpt-5.5', effor
 
 /**
  * The default (provider, model, effort) for a freshly-connected provider.
- * Returns `null` for `opencode` when no live model id is available — callers
- * must not seed in that case rather than guess a catalog id.
+ * Returns `null` for the dynamic-catalog providers (`opencode`, `copilot`)
+ * when no live model id is available — callers must not seed in that case
+ * rather than guess a catalog id. `firstDynamicModelId` is the already-
+ * prefixed id (`opencode/<id>` or `copilot/<id>`).
  */
 export function defaultSettingForProvider(
   provider: Provider,
-  firstOpenCodeModelId: string | null,
+  firstDynamicModelId: string | null,
 ): AgentModelSetting | null {
   if (provider === 'anthropic') {
     return { provider, model: ANTHROPIC_SEED.model, effort: ANTHROPIC_SEED.effort };
@@ -88,21 +92,21 @@ export function defaultSettingForProvider(
   if (provider === 'openai') {
     return { provider, model: OPENAI_SEED.model, effort: OPENAI_SEED.effort };
   }
-  // opencode: no static catalog — a live id is required to seed.
-  if (!firstOpenCodeModelId) return null;
-  return { provider, model: firstOpenCodeModelId, effort: null };
+  // opencode / copilot: no static catalog — a live id is required to seed.
+  if (!firstDynamicModelId) return null;
+  return { provider, model: firstDynamicModelId, effort: null };
 }
 
 /**
  * Build a full per-user settings map (all six agents) seeded to one provider's
- * default. Returns `null` when the provider can't be defaulted (opencode with
- * no live model id) so the caller declines to seed.
+ * default. Returns `null` when the provider can't be defaulted (a dynamic-
+ * catalog provider with no live model id) so the caller declines to seed.
  */
 export function buildSeedSettings(
   provider: Provider,
-  firstOpenCodeModelId: string | null,
+  firstDynamicModelId: string | null,
 ): AgentModelSettings | null {
-  const setting = defaultSettingForProvider(provider, firstOpenCodeModelId);
+  const setting = defaultSettingForProvider(provider, firstDynamicModelId);
   if (!setting) return null;
   const result = {} as AgentModelSettings;
   for (const agentType of AGENT_TYPES_WITH_SETTINGS) {
@@ -133,7 +137,8 @@ export function isValidAgentModelSetting(
   if (
     setting.provider !== 'anthropic' &&
     setting.provider !== 'openai' &&
-    setting.provider !== 'opencode'
+    setting.provider !== 'opencode' &&
+    setting.provider !== 'copilot'
   ) {
     return false;
   }
@@ -149,10 +154,12 @@ export const MODELS_FOR_UI = {
   anthropic: ANTHROPIC_MODELS,
   openai: OPENAI_MODELS,
   opencode: OPENCODE_MODELS,
+  copilot: COPILOT_MODELS,
 } as const;
 
 export const EFFORTS_FOR_UI = {
   anthropic: ANTHROPIC_EFFORTS,
   openai: OPENAI_EFFORTS,
   opencode: OPENCODE_EFFORTS,
+  copilot: COPILOT_EFFORTS,
 } as const;

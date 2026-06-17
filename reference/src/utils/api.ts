@@ -132,6 +132,13 @@ import type {
   SetOpenCodeKeyResponse,
 } from '../../shared/api/openCodeAuth';
 import type {
+  CopilotAuthStatusResponse,
+  StartCopilotAuthResponse,
+  CancelCopilotAuthResponse,
+  ClearCopilotAuthResponse,
+  CopilotModelsResponse,
+} from '../../shared/api/copilotAuth';
+import type {
   ConnectedProvidersResponse,
   GetUserAgentModelSettingsResponse,
   UpdateUserAgentModelSettingsResponse,
@@ -304,6 +311,31 @@ export const api = {
       authenticatedFetch<ClearCodexAuthResponse>('/api/codex-auth', {
         method: 'DELETE',
       }),
+  },
+
+  copilotAuth: {
+    status: (): TypedFetch<CopilotAuthStatusResponse> =>
+      authenticatedFetch<CopilotAuthStatusResponse>('/api/copilot-auth/status'),
+    start: (): TypedFetch<StartCopilotAuthResponse> =>
+      authenticatedFetch<StartCopilotAuthResponse>('/api/copilot-auth/start', {
+        method: 'POST',
+      }),
+    complete: (loginSessionId: string): TypedFetch<CopilotAuthStatusResponse> =>
+      authenticatedFetch<CopilotAuthStatusResponse>('/api/copilot-auth/complete', {
+        method: 'POST',
+        body: JSON.stringify({ loginSessionId }),
+      }),
+    cancel: (loginSessionId: string): TypedFetch<CancelCopilotAuthResponse> =>
+      authenticatedFetch<CancelCopilotAuthResponse>('/api/copilot-auth/cancel', {
+        method: 'POST',
+        body: JSON.stringify({ loginSessionId }),
+      }),
+    clear: (): TypedFetch<ClearCopilotAuthResponse> =>
+      authenticatedFetch<ClearCopilotAuthResponse>('/api/copilot-auth', {
+        method: 'DELETE',
+      }),
+    models: (): TypedFetch<CopilotModelsResponse> =>
+      authenticatedFetch<CopilotModelsResponse>('/api/copilot-auth/models'),
   },
 
   account: {

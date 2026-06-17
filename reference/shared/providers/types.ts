@@ -27,13 +27,15 @@ import type {
   OpenAIEffort,
   OpenCodeModel,
   OpenCodeEffort,
+  CopilotModel,
+  CopilotEffort,
 } from './models.js';
 
-export type Provider = 'anthropic' | 'openai' | 'opencode';
+export type Provider = 'anthropic' | 'openai' | 'opencode' | 'copilot';
 
-export type ProviderModel = AnthropicModel | OpenAIModel | OpenCodeModel;
+export type ProviderModel = AnthropicModel | OpenAIModel | OpenCodeModel | CopilotModel;
 
-export type ProviderEffort = AnthropicEffort | OpenAIEffort | OpenCodeEffort;
+export type ProviderEffort = AnthropicEffort | OpenAIEffort | OpenCodeEffort  ;
 
 /**
  * Capability flags per provider. Call sites that depend on a

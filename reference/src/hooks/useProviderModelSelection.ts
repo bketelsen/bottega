@@ -16,11 +16,13 @@ import { PROVIDERS } from '../../shared/providers/models';
 import { useConnectedProviders } from '../contexts/ConnectedProvidersContext';
 import type { Provider } from '../../shared/providers/types';
 import type { OpenCodeModelEntry } from '../../shared/api/openCodeAuth';
+import type { CopilotModelEntry } from '../../shared/api/copilotAuth';
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: 'Claude',
   openai: 'OpenAI',
   opencode: 'OpenCode',
+  copilot: 'GitHub Copilot',
 };
 
 // Static labels for the two enum-backed providers. OpenCode labels come from
@@ -33,13 +35,17 @@ const MODEL_LABELS: Record<string, string> = {
   'gpt-5.4-mini': 'GPT-5.4 mini',
 };
 
-/** First selectable model for a provider, given the (maybe-unloaded) Zen catalog. */
+/** First selectable model for a provider, given the (maybe-unloaded) dynamic catalogs. */
 export function firstModelFor(
   p: Provider,
   openCodeModels: OpenCodeModelEntry[] | null,
+  copilotModels: CopilotModelEntry[] | null = null,
 ): string {
   if (p === 'opencode') {
     return openCodeModels && openCodeModels.length > 0 ? openCodeModels[0]!.id : '';
+  }
+  if (p === 'copilot') {
+    return copilotModels && copilotModels.length > 0 ? copilotModels[0]!.id : '';
   }
   return MODELS_FOR_UI[p][0] ?? '';
 }
@@ -94,6 +100,9 @@ export function useProviderModelSelection(): ProviderModelSelection {
   // Live Zen catalog: null = not yet fetched, [] = fetched-but-none (no key).
   const [openCodeModels, setOpenCodeModels] = useState<OpenCodeModelEntry[] | null>(null);
   const [loadingOpenCodeModels, setLoadingOpenCodeModels] = useState(false);
+  // Live Copilot catalog: null = not yet fetched, [] = fetched-but-none.
+  const [copilotModels, setCopilotModels] = useState<CopilotModelEntry[] | null>(null);
+  const [loadingCopilotModels, setLoadingCopilotModels] = useState(false);
 
   // Best-effort fetch of the per-user OpenCode catalog. Returns [] (not an
   // error) when the user has no Zen key, mirroring the settings UI.
@@ -116,6 +125,26 @@ export function useProviderModelSelection(): ProviderModelSelection {
     }
   }, []);
 
+  // Best-effort fetch of the per-user Copilot catalog. Returns [] when the
+  // user has no Copilot token configured.
+  const loadCopilotModels = useCallback(async () => {
+    setLoadingCopilotModels(true);
+    try {
+      const res = await api.copilotAuth.models();
+      if (!res.ok) {
+        setCopilotModels([]);
+        return;
+      }
+      const body = await res.json();
+      setCopilotModels(body.models);
+      setModel((prev) => (prev === '' && body.models.length > 0 ? body.models[0]!.id : prev));
+    } catch {
+      setCopilotModels([]);
+    } finally {
+      setLoadingCopilotModels(false);
+    }
+  }, []);
+
   // Switch provider + reset the model to that provider's first option. For
   // OpenCode this kicks off the (lazy, per-user) catalog fetch on first use.
   const applyProvider = useCallback(
@@ -128,11 +157,18 @@ export function useProviderModelSelection(): ProviderModelSelection {
         } else {
           setModel(firstModelFor('opencode', openCodeModels));
         }
+      } else if (next === 'copilot') {
+        if (copilotModels === null) {
+          setModel('');
+          void loadCopilotModels();
+        } else {
+          setModel(firstModelFor('copilot', openCodeModels, copilotModels));
+        }
       } else {
-        setModel(firstModelFor(next, openCodeModels));
+        setModel(firstModelFor(next, openCodeModels, copilotModels));
       }
     },
-    [openCodeModels, loadOpenCodeModels],
+    [openCodeModels, copilotModels, loadOpenCodeModels, loadCopilotModels],
   );
 
   const handleProviderChange = useCallback(
@@ -156,8 +192,21 @@ export function useProviderModelSelection(): ProviderModelSelection {
     } else if (preferred === 'opencode' && openCodeModels === null && !loadingOpenCodeModels) {
       setModel('');
       void loadOpenCodeModels();
+    } else if (preferred === 'copilot' && copilotModels === null && !loadingCopilotModels) {
+      setModel('');
+      void loadCopilotModels();
     }
-  }, [connected, provider, openCodeModels, loadingOpenCodeModels, applyProvider, loadOpenCodeModels]);
+  }, [
+    connected,
+    provider,
+    openCodeModels,
+    loadingOpenCodeModels,
+    copilotModels,
+    loadingCopilotModels,
+    applyProvider,
+    loadOpenCodeModels,
+    loadCopilotModels,
+  ]);
 
   // Options for the model dropdown — static enum for anthropic/openai, the
   // live Zen catalog for opencode (empty until fetched or when no key).
@@ -168,8 +217,10 @@ export function useProviderModelSelection(): ProviderModelSelection {
             value: m.id,
             label: m.status === 'deprecated' ? `${m.name} (deprecated)` : m.name,
           }))
-        : MODELS_FOR_UI[provider].map((m) => ({ value: m, label: MODEL_LABELS[m] ?? m })),
-    [provider, openCodeModels],
+        : provider === 'copilot'
+          ? (copilotModels ?? []).map((m) => ({ value: m.id, label: m.name }))
+          : MODELS_FOR_UI[provider].map((m) => ({ value: m, label: MODEL_LABELS[m] ?? m })),
+    [provider, openCodeModels, copilotModels],
   );
 
   // `reset` must keep a STABLE identity: callers wire it into open/close
@@ -194,7 +245,9 @@ export function useProviderModelSelection(): ProviderModelSelection {
     setModel,
     handleProviderChange,
     modelOptions,
-    loadingOpenCodeModels,
+    // Surfaced to the picker as "a dynamic catalog is loading" for either
+    // dynamic-catalog provider; the field keeps its historical name.
+    loadingOpenCodeModels: loadingOpenCodeModels || loadingCopilotModels,
     availableProviders,
     reset,
   };

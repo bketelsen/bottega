@@ -63,6 +63,7 @@ This directory is organized by architectural concern. Pull whichever file matche
 |---|---|
 | **[`claude-sdk-integration.md`](./claude-sdk-integration.md)** | Anything touching the Claude Agent SDK: transcript storage, per-user OAuth, `query()` options, the `AskUserQuestion` tool, the stale-subprocess 401 recovery. |
 | **[`opencode-sdk-integration.md`](./opencode-sdk-integration.md)** | Anything touching OpenCode: Zen auth, per-user `opencode serve` pool, session model, event mapping, REST routes. |
+| **[`copilot-sdk-integration.md`](./copilot-sdk-integration.md)** | Anything touching GitHub Copilot: device/OAuth auth, per-user `CopilotClient` pool, the EventEmitter→async-generator bridge, event mapping, REST routes. |
 | **[`conversation-management.md`](./conversation-management.md)** | Conversation lifecycle (start / resume / abort), WebSocket streaming, history loading, context-usage, title generation, slash commands, file attachments, voice input, the chat UI. |
 | **[`agentic-loop.md`](./agentic-loop.md)** | The six agent types, the auto-chaining state machine, YOLO mode, prompt templates + user overrides, per-agent model+effort, git worktrees, GitHub webhook callbacks. |
 | **[`task-management.md`](./task-management.md)** | The domain model (projects / tasks / conversations), the SQLite schema, `TaskContext` state + navigation, URL routing, the 4-screen UI flow. |

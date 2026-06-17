@@ -20,6 +20,7 @@ import {
 } from '../database/db.js';
 import { getCredentialStore } from './credentials/registry.js';
 import { listOpenCodeModels } from './providers/opencode/index.js';
+import { listCopilotModels } from './providers/copilot/index.js';
 import {
   AGENT_TYPES_WITH_SETTINGS,
   isValidAgentModelSetting,
@@ -95,7 +96,12 @@ export function saveAgentModelSettings(userId: number, settings: AgentModelSetti
 }
 
 // Highest-priority connected provider wins when seeding a new user.
-const SEED_PROVIDER_PRIORITY: readonly Provider[] = ['anthropic', 'openai', 'opencode'];
+const SEED_PROVIDER_PRIORITY: readonly Provider[] = [
+  'anthropic',
+  'openai',
+  'opencode',
+  'copilot',
+];
 
 /**
  * Seed a user's agent settings from their first connected provider, if they
@@ -121,18 +127,28 @@ export async function ensureUserAgentModelSettings(userId: number): Promise<bool
   }
   if (!chosen) return false;
 
-  let firstOpenCodeModelId: string | null = null;
+  // Dynamic-catalog providers (opencode, copilot) have no static default — a
+  // live model id is required to seed, and we never guess one.
+  let firstDynamicModelId: string | null = null;
   if (chosen === 'opencode') {
     try {
       const models = await listOpenCodeModels(userId);
-      firstOpenCodeModelId = models[0]?.id ?? null;
+      firstDynamicModelId = models[0]?.id ?? null;
     } catch {
-      firstOpenCodeModelId = null;
+      firstDynamicModelId = null;
     }
-    if (!firstOpenCodeModelId) return false;
+    if (!firstDynamicModelId) return false;
+  } else if (chosen === 'copilot') {
+    try {
+      const models = await listCopilotModels(userId);
+      firstDynamicModelId = models[0]?.id ?? null;
+    } catch {
+      firstDynamicModelId = null;
+    }
+    if (!firstDynamicModelId) return false;
   }
 
-  const seed = buildSeedSettings(chosen, firstOpenCodeModelId);
+  const seed = buildSeedSettings(chosen, firstDynamicModelId);
   if (!seed) return false;
 
   saveAgentModelSettings(userId, seed);

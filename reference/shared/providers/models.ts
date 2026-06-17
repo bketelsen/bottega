@@ -60,7 +60,19 @@ export type OpenCodeModel = `opencode/${string}`;
 export const OPENCODE_EFFORTS = [] as const;
 export type OpenCodeEffort = never;
 
-export const PROVIDERS = ['anthropic', 'openai', 'opencode'] as const;
+// Copilot mirrors OpenCode: the model catalog is owned upstream by GitHub
+// (queried live from the started `CopilotClient`), so Bottega does NOT
+// hardcode it. Storage uses `copilot/<modelID>` for unambiguous persistence;
+// the provider strips the prefix before handing the bare model id to the SDK.
+export const COPILOT_MODELS = [] as const;
+export type CopilotModel = `copilot/${string}`;
+
+// Copilot has no separate reasoning_effort dimension in v1 — reasoning is
+// encoded in the chosen model. UI hides the effort dropdown when empty.
+export const COPILOT_EFFORTS = [] as const;
+export type CopilotEffort = never;
+
+export const PROVIDERS = ['anthropic', 'openai', 'opencode', 'copilot'] as const;
 
 /**
  * Return the model list for a provider. Used by the settings UI and
@@ -70,12 +82,14 @@ export const PROVIDERS = ['anthropic', 'openai', 'opencode'] as const;
 export function modelsForProvider(provider: Provider): readonly string[] {
   if (provider === 'anthropic') return ANTHROPIC_MODELS;
   if (provider === 'openai') return OPENAI_MODELS;
+  if (provider === 'copilot') return COPILOT_MODELS;
   return OPENCODE_MODELS;
 }
 
 export function effortsForProvider(provider: Provider): readonly string[] {
   if (provider === 'anthropic') return ANTHROPIC_EFFORTS;
   if (provider === 'openai') return OPENAI_EFFORTS;
+  if (provider === 'copilot') return COPILOT_EFFORTS;
   return OPENCODE_EFFORTS;
 }
 
@@ -113,6 +127,19 @@ export function isOpenCodeEffort(value: unknown): value is OpenCodeEffort {
   return false;
 }
 
+// Prefix-only check — the Copilot catalog is dynamic (see the COPILOT_MODELS
+// comment). Anything past `copilot/` is opaque to Bottega; runtime validation
+// happens at the SDK boundary where Copilot rejects an unknown model id.
+export function isCopilotModel(value: unknown): value is CopilotModel {
+  return typeof value === 'string' && value.startsWith('copilot/') && value.length > 'copilot/'.length;
+}
+
+export function isCopilotEffort(value: unknown): value is CopilotEffort {
+  // Copilot has no efforts — nothing satisfies this guard.
+  void value;
+  return false;
+}
+
 /** True when `model` is a valid model for `provider`. */
 export function isModelForProvider(
   provider: Provider,
@@ -124,6 +151,7 @@ export function isModelForProvider(
   // shape. Anthropic and OpenAI use a static enum so we still gate
   // against the canonical list.
   if (provider === 'opencode') return isOpenCodeModel(model);
+  if (provider === 'copilot') return isCopilotModel(model);
   return modelsForProvider(provider).includes(model);
 }
 

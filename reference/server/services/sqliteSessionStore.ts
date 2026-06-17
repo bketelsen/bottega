@@ -27,7 +27,7 @@ interface SessionKey {
    * SessionStoreEntry shape and would mis-handle non-Claude
    * UnifiedMessages.
    */
-  provider?: 'anthropic' | 'openai' | 'opencode';
+  provider?: 'anthropic' | 'openai' | 'opencode' | 'copilot';
 }
 
 interface ProjectSessionKey {

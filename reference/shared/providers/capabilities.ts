@@ -49,6 +49,22 @@ export const CAPABILITIES_BY_PROVIDER: Record<Provider, ProviderCapabilities> = 
     supportsMcpServers: false,
     supportsImages: false,
   },
+  copilot: {
+    // v1: no structured AskUserQuestion tool. The Copilot SDK surfaces
+    // permission requests via `onPermissionRequest`, which we auto-approve
+    // per the conversation's permission mode rather than round-tripping to
+    // the user.
+    supportsAskUserQuestion: false,
+    // Copilot emits `assistant.reasoning_delta` — incremental thinking
+    // partials we forward as `stream_delta`. This is the one feature richer
+    // than Codex in v1.
+    supportsThinkingDelta: true,
+    // Only aggregate usage is available at turn end; no per-tool breakdown.
+    supportsContextUsageBreakdown: false,
+    // Copilot SDK supports MCP, but it is not wired into Bottega in v1.
+    supportsMcpServers: false,
+    supportsImages: false,
+  },
 };
 
 export function getCapabilities(provider: Provider): ProviderCapabilities {

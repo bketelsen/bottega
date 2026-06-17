@@ -35,6 +35,10 @@ import {
   startOpenCodeConversation,
   sendOpenCodeMessage,
 } from './startOpenCodeConversation.js';
+import {
+  startCopilotConversation,
+  sendCopilotMessage,
+} from './startCopilotConversation.js';
 import type { ConversationOptions, StreamingContext } from './types.js';
 
 /**
@@ -70,6 +74,9 @@ export async function startConversation(
   }
   if (options.provider === 'opencode') {
     return startOpenCodeConversation(taskId, message, options);
+  }
+  if (options.provider === 'copilot') {
+    return startCopilotConversation(taskId, message, options);
   }
 
   const normalizedOptions = validateAndNormalizeOptions(options, 'startConversation');
@@ -392,6 +399,9 @@ export async function sendMessage(
   }
   if (resolvedProvider === 'opencode') {
     return sendOpenCodeMessage(conversationId, message, options);
+  }
+  if (resolvedProvider === 'copilot') {
+    return sendCopilotMessage(conversationId, message, options);
   }
 
   const normalizedOptions = validateAndNormalizeOptions(options, 'sendMessage');

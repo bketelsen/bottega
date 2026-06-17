@@ -17,6 +17,7 @@ import {
   isOpenAIEffort,
   isOpenCodeModel,
   isOpenCodeEffort,
+  isCopilotModel,
   isModelForProvider,
   isEffortForProvider,
 } from './models.js';
@@ -54,8 +55,8 @@ describe('shared/providers/models', () => {
       expect([...OPENCODE_EFFORTS]).toEqual([]);
     });
 
-    it('enumerates all three providers', () => {
-      expect([...PROVIDERS]).toEqual(['anthropic', 'openai', 'opencode']);
+    it('enumerates all four providers', () => {
+      expect([...PROVIDERS]).toEqual(['anthropic', 'openai', 'opencode', 'copilot']);
     });
   });
 
@@ -78,6 +79,10 @@ describe('shared/providers/models', () => {
     it('effortsForProvider returns an empty list for OpenCode', () => {
       expect(effortsForProvider('opencode')).toEqual([]);
     });
+    it('Copilot ships no hardcoded model list and no efforts — the catalog is fetched live', () => {
+      expect(modelsForProvider('copilot')).toEqual([]);
+      expect(effortsForProvider('copilot')).toEqual([]);
+    });
   });
 
   describe('type guards', () => {
@@ -85,6 +90,7 @@ describe('shared/providers/models', () => {
       expect(isProvider('anthropic')).toBe(true);
       expect(isProvider('openai')).toBe(true);
       expect(isProvider('opencode')).toBe(true);
+      expect(isProvider('copilot')).toBe(true);
       expect(isProvider('claude')).toBe(false);
       expect(isProvider('')).toBe(false);
       expect(isProvider(undefined)).toBe(false);
@@ -155,6 +161,13 @@ describe('shared/providers/models', () => {
       expect(isModelForProvider('opencode', 'kimi-k2.6')).toBe(false);
       expect(isModelForProvider('opencode', 'opus')).toBe(false);
       expect(isModelForProvider('anthropic', 'opencode/kimi-k2.6')).toBe(false);
+      // Copilot is also prefix-checked — the catalog is owned upstream.
+      expect(isCopilotModel('copilot/gpt-5')).toBe(true);
+      expect(isCopilotModel('copilot/')).toBe(false);
+      expect(isCopilotModel('copilot')).toBe(false);
+      expect(isCopilotModel('gpt-5')).toBe(false);
+      expect(isModelForProvider('copilot', 'copilot/claude-sonnet-4.5')).toBe(true);
+      expect(isModelForProvider('copilot', 'gpt-5')).toBe(false);
     });
 
     it('isEffortForProvider rejects cross-provider efforts', () => {
