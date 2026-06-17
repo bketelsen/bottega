@@ -441,8 +441,8 @@ describe('Auth Middleware', () => {
       const decoded = jwt.verify(token, getJwtSecret()) as JwtPayload;
 
       expect(decoded.exp).toBeDefined();
-      const issuedAt = (decoded.iat ?? 0) as number;
-      const exp = (decoded.exp ?? 0) as number;
+      const issuedAt = (decoded.iat ?? 0);
+      const exp = (decoded.exp ?? 0);
       const lifetimeSeconds = exp - issuedAt;
       // 30 days = 2,592,000 s. Allow ±5 s for clock granularity.
       expect(lifetimeSeconds).toBeGreaterThanOrEqual(2_591_995);

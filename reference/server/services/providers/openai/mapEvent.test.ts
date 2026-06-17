@@ -6,7 +6,7 @@ import type { ThreadEvent } from '@openai/codex-sdk';
 const SID = 'thread-abc-1';
 
 function ev(raw: unknown): ThreadEvent {
-  return raw as unknown as ThreadEvent;
+  return raw as ThreadEvent;
 }
 
 describe('CodexProvider mapEvent', () => {

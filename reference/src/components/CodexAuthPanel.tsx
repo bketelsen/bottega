@@ -225,7 +225,7 @@ export function CodexAuthPanel() {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  navigator.clipboard.writeText(status.login!.deviceCode!);
+                  void navigator.clipboard.writeText(status.login!.deviceCode!);
                   setInfo('Code copied to clipboard');
                 }}
               >

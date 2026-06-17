@@ -98,7 +98,7 @@ const defaultDeps: SpawnDeps = {
   spawnFn: spawn as unknown as SpawnFn,
   pickPort: pickFreePort,
   buildEnv: (userId) =>
-    buildOpenCodeSpawnEnv(userId) as NodeJS.ProcessEnv,
+    buildOpenCodeSpawnEnv(userId),
   createClient: createOpencodeClient,
   readyTimeoutMs: parseIntEnv(
     process.env['OPENCODE_READY_TIMEOUT_MS'],
@@ -288,7 +288,7 @@ class OpenCodeServerPool {
       'opencode',
       ['serve', '--hostname', '127.0.0.1', '--port', String(port)],
       { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true },
-    ) as unknown as ChildProcessWithoutNullStreams;
+    ) as ChildProcessWithoutNullStreams;
 
     const exited$ = new Promise<void>((resolve) => {
       child.once('exit', () => resolve());
@@ -410,7 +410,7 @@ class OpenCodeServerPool {
         this.entries.delete(entry.handle.userId);
         resolve();
       };
-      entry.exited$.then(finish);
+      void entry.exited$.then(finish);
       if (entry.child.exitCode !== null || entry.child.signalCode !== null) {
         finish();
         return;
@@ -445,7 +445,7 @@ class OpenCodeServerPool {
         signalBoth('SIGKILL');
       }, 5000);
       if (typeof killTimer.unref === 'function') killTimer.unref();
-      entry.exited$.then(() => clearTimeout(killTimer));
+      void entry.exited$.then(() => clearTimeout(killTimer));
     });
   }
 }

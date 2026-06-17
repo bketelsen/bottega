@@ -45,6 +45,7 @@ describe('credentials/registry', () => {
 
   it('default module load wires opencode alongside anthropic and openai', async () => {
     _resetForTests();
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- `as string` stops TS resolving the literal as a real module path (TS2307)
     await import('./registry.js?reload=opencode-default' as string).catch(() => {
       // The query string is a no-op; importing the bare module re-runs the
       // top-level registerCredentialStore() calls once the registry has

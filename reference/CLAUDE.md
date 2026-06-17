@@ -130,7 +130,7 @@ bash scripts/gate.sh   # exit 0 = good to go; verify the EXIT CODE, not the outp
 
 It runs, in order: `pnpm install --frozen-lockfile` + `pnpm test:run` (this is exactly
 what GitHub CI runs — if these pass, the PR's Unit Tests check passes), then `tsc
---noEmit` and the no-JS guard as stricter-than-CI local insurance. A green gate is the
+--noEmit` and `pnpm lint` (eslint — error-strict, warning-tolerant; its prelint hook also runs the no-JS guard) as stricter-than-CI local insurance. A green gate is the
 definition of done here; do not report work complete on a red or un-run gate.
 
 ## Git workflow (this is an independent fork)

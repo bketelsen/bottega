@@ -28,7 +28,6 @@ import type {
   OpenCodeModel,
   OpenCodeEffort,
   CopilotModel,
-  CopilotEffort,
 } from './models.js';
 
 export type Provider = 'anthropic' | 'openai' | 'opencode' | 'copilot';

@@ -24,7 +24,7 @@ type AnyRecord = Record<string, unknown>;
 function getId(raw: AnyRecord, prefix: string): string {
   const messageId = (raw.message as AnyRecord | undefined)?.id;
   if (typeof messageId === 'string') return messageId;
-  if (typeof raw.uuid === 'string') return raw.uuid as string;
+  if (typeof raw.uuid === 'string') return raw.uuid;
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
 

@@ -51,7 +51,7 @@ describe('OpenCodeAuthPanel', () => {
         authPath: '/x/auth.json',
         tokenFingerprint: null,
         reason: 'not provisioned',
-      }) as never,
+      }),
     );
     render(<OpenCodeAuthPanel />);
     await waitFor(() => expect(screen.getByText(/Not connected/)).toBeInTheDocument());
@@ -66,7 +66,7 @@ describe('OpenCodeAuthPanel', () => {
         authPath: '/x/auth.json',
         tokenFingerprint: 'xyz123',
         reason: null,
-      }) as never,
+      }),
     );
     render(<OpenCodeAuthPanel />);
     await waitFor(() => expect(screen.getByText(/Connected/)).toBeInTheDocument());
@@ -82,7 +82,7 @@ describe('OpenCodeAuthPanel', () => {
         authPath: '/x/auth.json',
         tokenFingerprint: null,
         reason: null,
-      }) as never,
+      }),
     );
     render(<OpenCodeAuthPanel />);
     await waitFor(() => expect(screen.getByText(/Not connected/)).toBeInTheDocument());
@@ -107,7 +107,7 @@ describe('OpenCodeAuthPanel', () => {
           authPath: '/x/auth.json',
           tokenFingerprint: null,
           reason: null,
-        }) as never,
+        }),
       )
       .mockResolvedValueOnce(
         mockOkJson({
@@ -116,14 +116,14 @@ describe('OpenCodeAuthPanel', () => {
           authPath: '/x/auth.json',
           tokenFingerprint: 'last66',
           reason: null,
-        }) as never,
+        }),
       );
     vi.mocked(api.openCodeAuth.setKey).mockResolvedValueOnce(
       mockOkJson({
         authenticated: true,
         status: 'authenticated',
         tokenFingerprint: 'last66',
-      }) as never,
+      }),
     );
     render(<OpenCodeAuthPanel />);
     await waitFor(() => expect(screen.getByText(/Not connected/)).toBeInTheDocument());
@@ -146,10 +146,10 @@ describe('OpenCodeAuthPanel', () => {
         authPath: '/x/auth.json',
         tokenFingerprint: null,
         reason: null,
-      }) as never,
+      }),
     );
     vi.mocked(api.openCodeAuth.setKey).mockResolvedValueOnce(
-      mockErrJson({ error: 'Invalid key', code: 'OPENCODE_AUTH_STORAGE_ERROR' }, 400) as never,
+      mockErrJson({ error: 'Invalid key', code: 'OPENCODE_AUTH_STORAGE_ERROR' }, 400),
     );
     render(<OpenCodeAuthPanel />);
     await waitFor(() => expect(screen.getByText(/Not connected/)).toBeInTheDocument());
@@ -169,7 +169,7 @@ describe('OpenCodeAuthPanel', () => {
           authPath: '/x/auth.json',
           tokenFingerprint: 'abc123',
           reason: null,
-        }) as never,
+        }),
       )
       .mockResolvedValueOnce(
         mockOkJson({
@@ -178,10 +178,10 @@ describe('OpenCodeAuthPanel', () => {
           authPath: '/x/auth.json',
           tokenFingerprint: null,
           reason: 'cleared',
-        }) as never,
+        }),
       );
     vi.mocked(api.openCodeAuth.clear).mockResolvedValueOnce(
-      mockOkJson({ cleared: true }) as never,
+      mockOkJson({ cleared: true }),
     );
     render(<OpenCodeAuthPanel />);
     await waitFor(() => expect(screen.getByText(/Connected/)).toBeInTheDocument());

@@ -425,7 +425,7 @@ export class OpenCodeProvider implements LlmProvider {
     const providerSessionId$ = new Promise<string>((resolve) => {
       resolveSessionId = resolve;
     });
-    providerSessionId$.then((id) => {
+    void providerSessionId$.then((id) => {
       ACTIVE_SESSIONS.set(id, {
         handle: ctx.handle,
         abortController,
@@ -457,7 +457,7 @@ export class OpenCodeProvider implements LlmProvider {
       get pid() {
         return pid;
       },
-    } as ProviderRunResult;
+    };
   }
 
   abortTurn(providerSessionId: string): boolean {

@@ -51,15 +51,15 @@ describe('AgentModelsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.userAgentModelSettings.get).mockReturnValue(
-      fakeRes(200, { needsSeeding: false, settings: anthropicSettings }) as never,
+      fakeRes(200, { needsSeeding: false, settings: anthropicSettings }),
     );
     vi.mocked(api.userAgentModelSettings.connectedProviders).mockReturnValue(
-      fakeRes(200, { connected: ['anthropic', 'opencode'] }) as never,
+      fakeRes(200, { connected: ['anthropic', 'opencode'] }),
     );
     vi.mocked(api.userAgentModelSettings.update).mockImplementation(
-      ((settings: Record<string, AgentModelSetting>) => fakeRes(200, { settings })) as never,
+      ((settings: Record<string, AgentModelSetting>) => fakeRes(200, { settings })),
     );
-    vi.mocked(api.openCodeAuth.models).mockReturnValue(fakeRes(200, zenCatalog) as never);
+    vi.mocked(api.openCodeAuth.models).mockReturnValue(fakeRes(200, zenCatalog));
   });
 
   it('renders a row per agent', async () => {
@@ -70,9 +70,10 @@ describe('AgentModelsTab', () => {
 
   it('filters the provider dropdown to connected providers only', async () => {
     vi.mocked(api.userAgentModelSettings.connectedProviders).mockReturnValue(
-      fakeRes(200, { connected: ['anthropic'] }) as never,
+      fakeRes(200, { connected: ['anthropic'] }),
     );
     render(<AgentModelsTab />);
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- tsc requires this assertion (see TS error if removed)
     const provider = (await screen.findByTestId('agent-provider-select-planification')) as HTMLSelectElement;
     expect(provider.querySelector('option[value="anthropic"]')).not.toBeNull();
     expect(provider.querySelector('option[value="openai"]')).toBeNull();
@@ -81,7 +82,7 @@ describe('AgentModelsTab', () => {
 
   it('prompts to connect a provider when the user is unseeded', async () => {
     vi.mocked(api.userAgentModelSettings.get).mockReturnValue(
-      fakeRes(200, { needsSeeding: true }) as never,
+      fakeRes(200, { needsSeeding: true }),
     );
     render(<AgentModelsTab />);
     expect(await screen.findByText(/Connect a provider/i)).toBeInTheDocument();
@@ -95,6 +96,7 @@ describe('AgentModelsTab', () => {
     fireEvent.change(provider, { target: { value: 'opencode' } });
 
     await waitFor(() => {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- tsc requires this assertion (see TS error if removed)
       const model = screen.getByTestId('agent-model-select-planification') as HTMLSelectElement;
       expect(model.value).toBe('opencode/kimi-k2.6');
     });
