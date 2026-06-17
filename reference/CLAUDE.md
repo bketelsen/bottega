@@ -112,11 +112,47 @@ provisioned by Corepack — run `corepack enable` once after cloning).
 
 - `pnpm dev` — frontend + backend concurrently (Vite on :5173, API on :3001)
 - `pnpm server` / `pnpm client` — backend / frontend only (used internally by `pnpm dev`)
-- `pnpm build` — production build
 - `pnpm test:run` — unit + integration tests (single run)
+- **Production serve (this fork): single process.** No `pnpm build`/`pnpm start` script. `scripts/prod-start.sh` runs `vite build` then `tsx server/index.ts`; the Node server serves the built React app from `dist/` with an SPA fallback (no `vite preview`, no proxy — one process on PORT 3001).
 
 Backend (`tsx`) does **not** hot-reload — restart the dev server to pick up
 backend changes. Frontend changes hot-reload via Vite HMR.
+
+## Verification gate — run before any change is "done"
+
+**`scripts/gate.sh` is the single authoritative check.** Before considering ANY change
+complete — and always before committing or pushing — run it from `reference/` and
+confirm it exits 0:
+
+```bash
+bash scripts/gate.sh   # exit 0 = good to go; verify the EXIT CODE, not the output
+```
+
+It runs, in order: `pnpm install --frozen-lockfile` + `pnpm test:run` (this is exactly
+what GitHub CI runs — if these pass, the PR's Unit Tests check passes), then `tsc
+--noEmit` and the no-JS guard as stricter-than-CI local insurance. A green gate is the
+definition of done here; do not report work complete on a red or un-run gate.
+
+## Git workflow (this is an independent fork)
+
+This repo is a fork. `origin` = **`bketelsen/bottega`** (push here). `upstream` =
+`vdaubry/bottega` (fetch-only; pull manually with `git fetch upstream && git merge
+upstream/main`). Personalizations are **not** sent upstream.
+
+**Always pin the repo and base when creating a PR** so it targets the fork, never
+upstream (`gh pr create` on a fork defaults its base to the upstream parent — that is
+the mistake to avoid):
+
+```bash
+git push -u origin <branch>
+gh pr create --repo bketelsen/bottega --base main --head <branch> \
+  --title "..." --body "..."
+# merging is a human decision; hand over the command, do not auto-merge:
+#   gh pr merge <n> --repo bketelsen/bottega --squash --delete-branch
+```
+
+If you ever omit `--repo`/`--base`, STOP and re-create the PR — a PR opened against
+`vdaubry/bottega` exposes fork changes upstream.
 
 ## Testing Instructions
 
