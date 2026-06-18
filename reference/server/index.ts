@@ -87,6 +87,13 @@ import {
   REFRESHED_TOKEN_HEADER,
 } from './middleware/auth.js';
 import type { WebSocketUser } from './middleware/auth.js';
+import {
+  isHeadless,
+  registerApiDocs,
+  registerStaticFrontend,
+  registerSpaFallback,
+  registerHeadlessRoutes,
+} from './serving.js';
 
 interface AugmentedIncomingMessage extends http.IncomingMessage {
   user?: WebSocketUser;
@@ -109,6 +116,9 @@ interface FileTreeItem {
 
 const app = express();
 const server = http.createServer(app);
+
+// When set, run API + WebSocket only — no static assets, no SPA fallback.
+const HEADLESS = isHeadless();
 
 function getSafeRequestPath(rawUrl: string | undefined): string {
   try {
@@ -183,6 +193,10 @@ app.get('/health', (_req, res) => {
   });
 });
 
+// OpenAPI spec + docs UI — public, registered before the authenticated /api
+// routers so the spec isn't gated behind a token. Served in both modes.
+registerApiDocs(app);
+
 app.use('/api/auth', authRoutes);
 
 app.use('/api/app-settings', appSettingsRoutes);
@@ -211,9 +225,11 @@ app.get('/api/streaming-sessions', authenticateToken, (req, res) => {
   res.json({ sessions });
 });
 
-app.use(express.static(path.join(__dirname, '../public')));
-// serve the built React app (single-process production: no vite, no proxy)
-app.use(express.static(path.join(__dirname, '../dist')));
+if (!HEADLESS) {
+  // serve static assets + the built React app (single-process production: no
+  // vite, no proxy). Skipped entirely in headless (API-only) mode.
+  registerStaticFrontend(app);
+}
 
 app.get('/api/projects/:id/files', authenticateToken, async (req: Request, res: Response) => {
   try {
@@ -434,15 +450,23 @@ async function startServer(): Promise<void> {
     }
 
     console.log(`${c.info('[INFO]')} Using Claude Agents SDK for Claude integration`);
-    console.log(
-      `${c.info('[INFO]')} Frontend (built) served by this server at ${c.dim('http://0.0.0.0:' + PORT)}`,
-    );
+    if (HEADLESS) {
+      console.log(
+        `${c.info('[INFO]')} Running HEADLESS — API + WebSocket only (frontend serving disabled)`,
+      );
+    } else {
+      console.log(
+        `${c.info('[INFO]')} Frontend (built) served by this server at ${c.dim('http://0.0.0.0:' + PORT)}`,
+      );
+    }
 
-    // SPA history fallback: any non-/api GET returns the built index.html
-    // (Express 5 dropped bare "*" string routes; use a negative-lookahead RegExp)
-    app.get(/^(?!\/api).*/, (_req: Request, res: Response) => {
-      res.sendFile(path.join(__dirname, '../dist/index.html'));
-    });
+    if (HEADLESS) {
+      // No SPA to serve: JSON banner at "/", JSON 404 for everything unmatched.
+      registerHeadlessRoutes(app);
+    } else {
+      // SPA history fallback: any non-/api GET returns the built index.html.
+      registerSpaFallback(app);
+    }
 
     server.listen(Number(PORT), '0.0.0.0', () => {
       const appInstallPath = path.join(__dirname, '..');

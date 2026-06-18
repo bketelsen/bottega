@@ -29,6 +29,8 @@
     "preserver": "pnpm check-env",
     "dev": "concurrently --kill-others \"pnpm run server\" \"pnpm run client\"",
     "server": "tsx server/index.ts",
+    "server:headless": "HEADLESS=1 tsx server/index.ts",
+    "start:headless": "bash headless-start.sh",
     "client": "vite --host",
     "create-user": "tsx scripts/create-user.ts",
     "onboarding": "tsx scripts/onboarding.ts",

@@ -1,0 +1,280 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Bottega API",
+    "version": "1.12.0",
+    "description": "REST + WebSocket API for Bottega — a task-driven interface to the Claude Code CLI and other coding agents.\n\nThis spec is **hand-maintained** (the routes don't yet share a central registry). When you add or change a route, update this file. It is served at `/api/openapi.json` and rendered at `/api/docs` in both normal and headless modes.\n\n**Auth:** all endpoints require a bearer token (`Authorization: Bearer <jwt|ccui_...>`) except `/health`, `/api/auth/status`, `/api/auth/register`, `/api/auth/login`, `/api/app-settings`, `/api/webhooks/github`, and the docs/spec endpoints. Bootstrap a fresh instance with `GET /api/auth/status` -> `POST /api/auth/register` -> use the returned `token`.\n\n**WebSocket:** connect to `/ws?token=<jwt>` for conversation streaming and live task/conversation subscriptions (not described by this OpenAPI document)."
+  },
+  "servers": [{ "url": "/", "description": "This server" }],
+  "security": [{ "bearerAuth": [] }],
+  "tags": [
+    { "name": "meta", "description": "Health, spec, and docs" },
+    { "name": "auth", "description": "App authentication + first-user bootstrap" },
+    { "name": "account", "description": "Per-user API keys" },
+    { "name": "providers", "description": "LLM provider auth flows (Claude, Codex, Copilot, OpenCode)" },
+    { "name": "projects", "description": "Projects + per-project web server" },
+    { "name": "tasks", "description": "Tasks, documentation, attachments, worktrees, PRs" },
+    { "name": "conversations", "description": "Conversations + messages" },
+    { "name": "agent-runs", "description": "Agent run orchestration" },
+    { "name": "settings", "description": "Prompts, app settings, per-user model settings, commands" },
+    { "name": "admin", "description": "Admin: users + project membership" },
+    { "name": "webhooks", "description": "Inbound webhooks (no bearer auth)" }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["meta"], "summary": "Health check", "security": [],
+        "responses": { "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "status": { "type": "string", "example": "ok" }, "timestamp": { "type": "string", "format": "date-time" } } } } } } }
+      }
+    },
+    "/api/openapi.json": {
+      "get": { "tags": ["meta"], "summary": "This OpenAPI document", "security": [], "responses": { "200": { "description": "OpenAPI 3.1 spec", "content": { "application/json": { "schema": { "type": "object" } } } } } }
+    },
+    "/api/docs": {
+      "get": { "tags": ["meta"], "summary": "Interactive API reference (HTML)", "security": [], "responses": { "200": { "description": "HTML docs page", "content": { "text/html": { "schema": { "type": "string" } } } } } }
+    },
+
+    "/api/auth/status": {
+      "get": { "tags": ["auth"], "summary": "Setup / auth status", "security": [], "responses": { "200": { "description": "Status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthStatusResponse" } } } } } }
+    },
+    "/api/auth/register": {
+      "post": { "tags": ["auth"], "summary": "Register the first user (one-time; becomes admin)", "security": [],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Credentials" } } } },
+        "responses": { "200": { "description": "Created + logged in", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthSuccessResponse" } } } }, "403": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/auth/login": {
+      "post": { "tags": ["auth"], "summary": "Log in", "security": [],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Credentials" } } } },
+        "responses": { "200": { "description": "Logged in", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthSuccessResponse" } } } }, "401": { "$ref": "#/components/responses/Error" }, "429": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/auth/user": {
+      "get": { "tags": ["auth"], "summary": "Current user", "responses": { "200": { "description": "User", "content": { "application/json": { "schema": { "type": "object", "properties": { "user": { "$ref": "#/components/schemas/AuthenticatedUser" } } } } } }, "401": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/auth/profile": {
+      "put": { "tags": ["auth"], "summary": "Update profile", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "isTechnical": { "type": "boolean" } }, "required": ["isTechnical"] } } } }, "responses": { "200": { "description": "Updated", "content": { "application/json": { "schema": { "type": "object", "properties": { "user": { "$ref": "#/components/schemas/AuthenticatedUser" } } } } } } } }
+    },
+    "/api/auth/logout": {
+      "post": { "tags": ["auth"], "summary": "Log out (invalidate token)", "responses": { "200": { "description": "Logged out", "content": { "application/json": { "schema": { "type": "object", "properties": { "success": { "const": true }, "message": { "type": "string" } } } } } } } }
+    },
+
+    "/api/account/api-key": {
+      "get": { "tags": ["account"], "summary": "API key status", "responses": { "200": { "description": "Status", "content": { "application/json": { "schema": { "type": "object", "properties": { "hasKey": { "type": "boolean" }, "lastUsedAt": { "type": ["string", "null"] } } } } } } } },
+      "post": { "tags": ["account"], "summary": "Generate a new API key (shown once)", "responses": { "200": { "description": "New key", "content": { "application/json": { "schema": { "type": "object", "properties": { "key": { "type": "string", "example": "ccui_..." } } } } } } } },
+      "delete": { "tags": ["account"], "summary": "Revoke the API key", "responses": { "200": { "description": "Revoked", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Success" } } } } } }
+    },
+
+    "/api/claude-auth/status": { "get": { "tags": ["providers"], "summary": "Claude auth status", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/claude-auth/start": { "post": { "tags": ["providers"], "summary": "Start Claude OAuth (returns authUrl)", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/claude-auth/complete": { "post": { "tags": ["providers"], "summary": "Complete Claude OAuth (paste code)", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "loginSessionId": { "type": "string" }, "code": { "type": "string" } }, "required": ["loginSessionId", "code"] } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/claude-auth/cancel": { "post": { "tags": ["providers"], "summary": "Cancel in-flight Claude OAuth", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/claude-auth": { "delete": { "tags": ["providers"], "summary": "Disconnect Claude", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+
+    "/api/codex-auth/status": { "get": { "tags": ["providers"], "summary": "Codex auth status", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/codex-auth/start": { "post": { "tags": ["providers"], "summary": "Start Codex device auth", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/codex-auth/cancel": { "post": { "tags": ["providers"], "summary": "Cancel Codex auth", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/codex-auth/paste": { "post": { "tags": ["providers"], "summary": "Paste a Codex API key", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/codex-auth": { "delete": { "tags": ["providers"], "summary": "Disconnect Codex", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+
+    "/api/opencode-auth/status": { "get": { "tags": ["providers"], "summary": "OpenCode auth status", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/opencode-auth/key": {
+      "put": { "tags": ["providers"], "summary": "Set OpenCode API key", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "key": { "type": "string" } }, "required": ["key"] } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } },
+      "delete": { "tags": ["providers"], "summary": "Remove OpenCode API key", "responses": { "200": { "$ref": "#/components/responses/Json" } } }
+    },
+    "/api/opencode-auth/models": { "get": { "tags": ["providers"], "summary": "List OpenCode models", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+
+    "/api/copilot-auth/status": { "get": { "tags": ["providers"], "summary": "Copilot auth status", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/copilot-auth/start": { "post": { "tags": ["providers"], "summary": "Start Copilot device auth", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/copilot-auth/complete": { "post": { "tags": ["providers"], "summary": "Complete Copilot auth", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/copilot-auth/cancel": { "post": { "tags": ["providers"], "summary": "Cancel Copilot auth", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/copilot-auth": { "delete": { "tags": ["providers"], "summary": "Disconnect Copilot", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/copilot-auth/models": { "get": { "tags": ["providers"], "summary": "List Copilot models", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+
+    "/api/projects": {
+      "get": { "tags": ["projects"], "summary": "List projects", "responses": { "200": { "description": "Projects", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Project" } } } } } } },
+      "post": { "tags": ["projects"], "summary": "Create a project", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "name": { "type": "string" }, "repoFolderPath": { "type": "string" }, "subprojectPath": { "type": "string" } }, "required": ["name", "repoFolderPath"] } } } }, "responses": { "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Project" } } } } } }
+    },
+    "/api/projects/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "tags": ["projects"], "summary": "Get a project", "responses": { "200": { "description": "Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Project" } } } }, "404": { "$ref": "#/components/responses/Error" } } },
+      "put": { "tags": ["projects"], "summary": "Update a project", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "name": { "type": "string" }, "repoFolderPath": { "type": "string" }, "subprojectPath": { "type": "string" } } } } } }, "responses": { "200": { "description": "Updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Project" } } } } } },
+      "delete": { "tags": ["projects"], "summary": "Delete a project", "responses": { "200": { "description": "Deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Success" } } } } } }
+    },
+    "/api/projects/{id}/upload": { "post": { "tags": ["projects"], "summary": "Upload a file to a project (multipart)", "parameters": [{ "$ref": "#/components/parameters/Id" }], "requestBody": { "content": { "multipart/form-data": { "schema": { "type": "object", "properties": { "file": { "type": "string", "format": "binary" } } } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/projects/{id}/files": { "get": { "tags": ["projects"], "summary": "Project file tree", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/projects/{id}/web-server": { "get": { "tags": ["projects"], "summary": "Web server status", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/projects/{id}/web-server/config": { "put": { "tags": ["projects"], "summary": "Update web server config", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/projects/{id}/web-server/switch": { "post": { "tags": ["projects"], "summary": "Switch active worktree web server", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/projects/{id}/web-server/verify": { "get": { "tags": ["projects"], "summary": "Verify web server", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+
+    "/api/tasks": { "get": { "tags": ["tasks"], "summary": "List all tasks", "parameters": [{ "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/TaskStatus" } }], "responses": { "200": { "description": "Tasks", "content": { "application/json": { "schema": { "type": "object", "properties": { "tasks": { "type": "array", "items": { "$ref": "#/components/schemas/Task" } } } } } } } } } },
+    "/api/projects/{projectId}/tasks": {
+      "parameters": [{ "name": "projectId", "in": "path", "required": true, "schema": { "type": "integer" } }],
+      "get": { "tags": ["tasks"], "summary": "List tasks for a project", "responses": { "200": { "description": "Tasks", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Task" } } } } } } },
+      "post": { "tags": ["tasks"], "summary": "Create a task", "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "title": { "type": "string" }, "description": { "type": "string" }, "yolo_mode": { "type": "boolean" } } } } } }, "responses": { "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Task" } } } } } }
+    },
+    "/api/projects/{projectId}/tasks/cleanup-old-completed": { "delete": { "tags": ["tasks"], "summary": "Delete old completed tasks", "parameters": [{ "name": "projectId", "in": "path", "required": true, "schema": { "type": "integer" } }, { "name": "keep", "in": "query", "schema": { "type": "integer", "default": 20 } }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/tasks/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "tags": ["tasks"], "summary": "Get a task", "responses": { "200": { "description": "Task", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Task" } } } }, "404": { "$ref": "#/components/responses/Error" } } },
+      "put": { "tags": ["tasks"], "summary": "Update a task", "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "title": { "type": "string" }, "status": { "$ref": "#/components/schemas/TaskStatus" }, "workflow_complete": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "Updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Task" } } } } } },
+      "delete": { "tags": ["tasks"], "summary": "Delete a task", "responses": { "200": { "$ref": "#/components/responses/Json" } } }
+    },
+    "/api/tasks/{id}/documentation": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "tags": ["tasks"], "summary": "Get task documentation", "responses": { "200": { "description": "Markdown doc", "content": { "application/json": { "schema": { "type": "object", "properties": { "content": { "type": "string" } } } } } } } },
+      "put": { "tags": ["tasks"], "summary": "Update task documentation", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "content": { "type": "string" } }, "required": ["content"] } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } }
+    },
+    "/api/tasks/{id}/attachments": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "tags": ["tasks"], "summary": "List attachments", "responses": { "200": { "$ref": "#/components/responses/Json" } } },
+      "post": { "tags": ["tasks"], "summary": "Upload an attachment (multipart)", "requestBody": { "content": { "multipart/form-data": { "schema": { "type": "object", "properties": { "file": { "type": "string", "format": "binary" } } } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } }
+    },
+    "/api/tasks/{id}/attachments/{filename}": { "delete": { "tags": ["tasks"], "summary": "Delete an attachment", "parameters": [{ "$ref": "#/components/parameters/Id" }, { "name": "filename", "in": "path", "required": true, "schema": { "type": "string" } }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/tasks/{id}/workflow-complete": { "put": { "tags": ["tasks"], "summary": "Set workflow complete", "parameters": [{ "$ref": "#/components/parameters/Id" }], "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "complete": { "type": "boolean" } }, "required": ["complete"] } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/tasks/{id}/resume": { "post": { "tags": ["tasks"], "summary": "Resume a task", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/tasks/{id}/worktree": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "tags": ["tasks"], "summary": "Worktree status", "responses": { "200": { "$ref": "#/components/responses/Json" } } },
+      "delete": { "tags": ["tasks"], "summary": "Discard worktree", "parameters": [{ "name": "force", "in": "query", "schema": { "type": "string", "enum": ["true"] } }], "responses": { "200": { "$ref": "#/components/responses/Json" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/tasks/{id}/sync": { "post": { "tags": ["tasks"], "summary": "Sync worktree with main", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/tasks/{id}/push-changes": { "post": { "tags": ["tasks"], "summary": "Push task changes", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/tasks/{id}/pull-request": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "tags": ["tasks"], "summary": "Get PR status", "responses": { "200": { "$ref": "#/components/responses/Json" } } },
+      "post": { "tags": ["tasks"], "summary": "Create / update PR", "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "title": { "type": "string" }, "body": { "type": "string" } }, "required": ["title"] } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } }
+    },
+    "/api/tasks/{id}/merge-cleanup": { "post": { "tags": ["tasks"], "summary": "Merge PR and clean up worktree", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/tasks/{id}/review-recording": { "get": { "tags": ["tasks"], "summary": "Get agent review audio", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "description": "Audio stream" } } } },
+
+    "/api/tasks/{taskId}/conversations": {
+      "parameters": [{ "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer" } }],
+      "get": { "tags": ["conversations"], "summary": "List conversations for a task", "responses": { "200": { "description": "Conversations", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Conversation" } } } } } } },
+      "post": { "tags": ["conversations"], "summary": "Create a conversation (optionally start a session)", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "message": { "type": "string" }, "projectPath": { "type": "string" }, "permissionMode": { "type": "string" }, "provider": { "type": "string" }, "model": { "type": "string" } }, "required": ["provider", "model"] } } } }, "responses": { "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Conversation" } } } } } }
+    },
+    "/api/conversations/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "tags": ["conversations"], "summary": "Get a conversation (+ token usage)", "responses": { "200": { "description": "Conversation", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Conversation" } } } } } },
+      "patch": { "tags": ["conversations"], "summary": "Rename a conversation", "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "name": { "type": ["string", "null"] } } } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } },
+      "delete": { "tags": ["conversations"], "summary": "Delete a conversation", "responses": { "200": { "$ref": "#/components/responses/Json" } } }
+    },
+    "/api/conversations/{id}/claude-id": { "patch": { "tags": ["conversations"], "summary": "Link an external Claude conversation id", "parameters": [{ "$ref": "#/components/parameters/Id" }], "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "claudeConversationId": { "type": "string" } }, "required": ["claudeConversationId"] } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/conversations/{id}/context-usage": { "get": { "tags": ["conversations"], "summary": "Context (token) usage", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/conversations/{id}/messages": { "get": { "tags": ["conversations"], "summary": "Message history", "parameters": [{ "$ref": "#/components/parameters/Id" }, { "name": "limit", "in": "query", "schema": { "type": "integer" } }, { "name": "offset", "in": "query", "schema": { "type": "integer" } }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/streaming-sessions": { "get": { "tags": ["conversations"], "summary": "Active streaming sessions for the user", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/transcribe": { "post": { "tags": ["conversations"], "summary": "Transcribe audio (requires OPENAI_API_KEY)", "requestBody": { "content": { "multipart/form-data": { "schema": { "type": "object", "properties": { "audio": { "type": "string", "format": "binary" } } } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+
+    "/api/tasks/{taskId}/agent-runs": {
+      "parameters": [{ "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer" } }],
+      "get": { "tags": ["agent-runs"], "summary": "List agent runs for a task", "responses": { "200": { "description": "Runs", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/AgentRun" } } } } } } },
+      "post": { "tags": ["agent-runs"], "summary": "Start an agent run", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "agentType": { "$ref": "#/components/schemas/AgentType" } }, "required": ["agentType"] } } } }, "responses": { "201": { "description": "Started", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentRun" } } } }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/agent-runs/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "tags": ["agent-runs"], "summary": "Get an agent run", "responses": { "200": { "description": "Run", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentRun" } } } } } },
+      "delete": { "tags": ["agent-runs"], "summary": "Delete an agent run", "responses": { "200": { "$ref": "#/components/responses/Json" } } }
+    },
+    "/api/agent-runs/{id}/complete": { "put": { "tags": ["agent-runs"], "summary": "Mark an agent run complete", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/agent-runs/{id}/link-conversation": { "put": { "tags": ["agent-runs"], "summary": "Link a conversation to an agent run", "parameters": [{ "$ref": "#/components/parameters/Id" }], "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "conversationId": { "type": "integer" } }, "required": ["conversationId"] } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+
+    "/api/commands/list": { "post": { "tags": ["settings"], "summary": "List slash commands", "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "projectPath": { "type": "string" } } } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/settings/prompts": { "get": { "tags": ["settings"], "summary": "List prompt templates", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/settings/prompts/{name}": {
+      "parameters": [{ "name": "name", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "get": { "tags": ["settings"], "summary": "Get a prompt template", "responses": { "200": { "$ref": "#/components/responses/Json" } } },
+      "put": { "tags": ["settings"], "summary": "Override a prompt template", "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "content": { "type": "string" }, "expectedMtime": { "type": "integer" } }, "required": ["content"] } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" }, "409": { "$ref": "#/components/responses/Error" } } },
+      "delete": { "tags": ["settings"], "summary": "Delete a prompt override", "responses": { "204": { "description": "Deleted" } } }
+    },
+    "/api/app-settings": {
+      "get": { "tags": ["settings"], "summary": "Get global app settings", "security": [], "responses": { "200": { "$ref": "#/components/responses/Json" } } },
+      "put": { "tags": ["settings"], "summary": "Update global app settings", "security": [], "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "internal_tool_name": { "type": "string" }, "github_pr_trigger": { "type": "string" } } } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" }, "400": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/user-agent-model-settings": {
+      "get": { "tags": ["settings"], "summary": "Get per-user agent model settings", "responses": { "200": { "$ref": "#/components/responses/Json" } } },
+      "put": { "tags": ["settings"], "summary": "Update per-user agent model settings", "responses": { "200": { "$ref": "#/components/responses/Json" } } }
+    },
+    "/api/user-agent-model-settings/connected-providers": { "get": { "tags": ["settings"], "summary": "Providers the user has credentials for", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+
+    "/api/admin/users": {
+      "get": { "tags": ["admin"], "summary": "List users", "responses": { "200": { "$ref": "#/components/responses/Json" } } },
+      "post": { "tags": ["admin"], "summary": "Create a user", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "username": { "type": "string" }, "password": { "type": "string" }, "is_admin": { "type": "boolean" } }, "required": ["username", "password"] } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } }
+    },
+    "/api/admin/users/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "put": { "tags": ["admin"], "summary": "Update a user", "responses": { "200": { "$ref": "#/components/responses/Json" } } },
+      "delete": { "tags": ["admin"], "summary": "Delete a user", "responses": { "200": { "$ref": "#/components/responses/Json" } } }
+    },
+    "/api/admin/projects": { "get": { "tags": ["admin"], "summary": "List all projects (with member counts)", "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+    "/api/admin/projects/{id}/members": {
+      "parameters": [{ "$ref": "#/components/parameters/Id" }],
+      "get": { "tags": ["admin"], "summary": "List project members", "responses": { "200": { "$ref": "#/components/responses/Json" } } },
+      "post": { "tags": ["admin"], "summary": "Add a project member", "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "userId": { "type": "integer" } }, "required": ["userId"] } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } }
+    },
+    "/api/admin/projects/{projectId}/members/{userId}": { "delete": { "tags": ["admin"], "summary": "Remove a project member", "parameters": [{ "name": "projectId", "in": "path", "required": true, "schema": { "type": "integer" } }, { "name": "userId", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
+
+    "/api/webhooks/github": { "post": { "tags": ["webhooks"], "summary": "GitHub webhook (HMAC-signed; no bearer auth)", "security": [], "requestBody": { "content": { "application/json": { "schema": { "type": "object" } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } } }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT", "description": "App JWT or per-user API key (`ccui_...`). Also accepted as `?token=` for WebSocket / media URLs." }
+    },
+    "parameters": {
+      "Id": { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+    },
+    "responses": {
+      "Json": { "description": "Success", "content": { "application/json": { "schema": { "type": "object" } } } },
+      "Error": { "description": "Error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+    },
+    "schemas": {
+      "ApiError": { "type": "object", "properties": { "error": { "type": "string" } }, "required": ["error"] },
+      "Success": { "type": "object", "properties": { "success": { "const": true } }, "required": ["success"] },
+      "Credentials": { "type": "object", "properties": { "username": { "type": "string" }, "password": { "type": "string" } }, "required": ["username", "password"] },
+      "AuthStatusResponse": { "type": "object", "properties": { "needsSetup": { "type": "boolean" }, "isAuthenticated": { "type": "boolean" } }, "required": ["needsSetup", "isAuthenticated"] },
+      "AuthenticatedUser": { "type": "object", "properties": { "id": { "type": "integer" }, "username": { "type": "string" }, "created_at": { "type": "string" }, "last_login": { "type": ["string", "null"] }, "is_admin": { "type": "integer", "enum": [0, 1] }, "is_technical": { "type": "integer", "enum": [0, 1] } } },
+      "AuthSuccessResponse": { "type": "object", "properties": { "success": { "const": true }, "user": { "$ref": "#/components/schemas/AuthenticatedUser" }, "token": { "type": "string" } }, "required": ["success", "user", "token"] },
+      "TaskStatus": { "type": "string", "enum": ["pending", "in_progress", "in_review", "completed"] },
+      "AgentType": { "type": "string", "enum": ["planification", "implementation", "refinement", "review", "pr", "yolo"] },
+      "AgentRunStatus": { "type": "string", "enum": ["pending", "running", "completed", "failed", "blocked"] },
+      "Project": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" }, "user_id": { "type": "integer" }, "name": { "type": "string" },
+          "repo_folder_path": { "type": "string" }, "subproject_path": { "type": ["string", "null"] },
+          "active_worktree_task_id": { "type": ["integer", "null"] }, "serve_symlink_path": { "type": ["string", "null"] },
+          "systemd_service_name": { "type": ["string", "null"] }, "app_url": { "type": ["string", "null"] },
+          "created_at": { "type": "string" }, "updated_at": { "type": "string" }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" }, "project_id": { "type": "integer" }, "user_id": { "type": ["integer", "null"] },
+          "title": { "type": ["string", "null"] }, "status": { "$ref": "#/components/schemas/TaskStatus" },
+          "workflow_complete": { "type": "integer", "enum": [0, 1] }, "workflow_blocked": { "type": "integer", "enum": [0, 1] },
+          "workflow_run_count": { "type": "integer" }, "planification_complete": { "type": "integer", "enum": [0, 1] },
+          "pr_agent_complete": { "type": "integer", "enum": [0, 1] }, "refinement_complete": { "type": "integer", "enum": [0, 1] },
+          "yolo_mode": { "type": "integer", "enum": [0, 1] }, "completed_at": { "type": ["string", "null"] },
+          "created_at": { "type": "string" }, "updated_at": { "type": "string" }
+        }
+      },
+      "Conversation": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" }, "task_id": { "type": "integer" },
+          "claude_conversation_id": { "type": ["string", "null"] }, "session_path": { "type": ["string", "null"] },
+          "name": { "type": ["string", "null"] }, "provider": { "type": "string" },
+          "provider_session_id": { "type": ["string", "null"] }, "model": { "type": ["string", "null"] },
+          "effort": { "type": ["string", "null"] }, "created_at": { "type": "string" }
+        }
+      },
+      "AgentRun": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" }, "task_id": { "type": "integer" }, "agent_type": { "$ref": "#/components/schemas/AgentType" },
+          "status": { "$ref": "#/components/schemas/AgentRunStatus" }, "conversation_id": { "type": ["integer", "null"] },
+          "provider": { "type": "string" }, "created_at": { "type": "string" }, "completed_at": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}
