@@ -68,27 +68,38 @@ Proceed to step 4 (conflict check) before completing.
 - Document the persistent failures
 - Stop and let the user investigate
 
-### 4. Check for Merge Conflicts
-Once CI passes, check if the PR has merge conflicts with the base branch:
+### 4. Check Mergeability (rebase if behind or conflicting)
+Once CI passes, check whether the branch is up to date with the base branch and
+free of conflicts:
 ```bash
 gh pr view --json mergeStateStatus,mergeable --jq '{ mergeStateStatus, mergeable }'
 ```
 
-**If mergeable is "MERGEABLE" (no conflicts):**
+`mergeStateStatus` tells you *why* a branch isn't ready:
+- `CLEAN` — up to date and mergeable.
+- `BEHIND` — no conflicts, but the branch is behind the base branch (it must be
+  brought up to date before it can merge cleanly).
+- `DIRTY` / `mergeable == "CONFLICTING"` — the branch conflicts with the base.
+- `UNKNOWN` — GitHub is still computing mergeability.
+
+**If `mergeStateStatus` is `CLEAN` (up to date, no conflicts):**
 Run the completion script:
 ```bash
 tsx /home/ubuntu/bottega/reference/scripts/complete-pr.ts {{taskId}}
 ```
 
-**If mergeable is "CONFLICTING" (has conflicts):**
-1. Rebase onto the base branch to resolve conflicts:
+**If `mergeStateStatus` is `BEHIND`, or `DIRTY`, or `mergeable` is `CONFLICTING`:**
+Rebase onto the base branch to bring the branch up to date and resolve any
+conflicts:
+1. Rebase onto the latest base branch:
    ```bash
    git fetch origin main && git rebase origin/main
    ```
-2. Resolve any conflicts during the rebase
-3. Continue the rebase: `git rebase --continue`
-4. Force push: `git push --force-with-lease`
-5. Return to step 2 to re-check CI (max 3 conflict resolution attempts)
+2. If the rebase stops on conflicts, resolve each conflicted file, then
+   `git add <files>` and `git rebase --continue` until the rebase completes.
+   (A `BEHIND` branch with no conflicts rebases cleanly with no manual steps.)
+3. Force push: `git push --force-with-lease`
+4. Return to step 2 to re-check CI (max 3 rebase/conflict-resolution attempts)
 
 **If mergeable is "UNKNOWN":**
 - Wait 10 seconds and re-check (GitHub may still be computing mergeability)

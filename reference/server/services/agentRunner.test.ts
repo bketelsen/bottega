@@ -42,13 +42,19 @@ vi.mock('../constants/agentPrompts.js', () => ({
   generatePlanificationMessage: vi.fn().mockReturnValue('planification message'),
   generateImplementationMessage: vi.fn().mockReturnValue('implementation message'),
   generateReviewMessage: vi.fn().mockReturnValue('review message'),
-  generateRefinementMessage: vi.fn().mockReturnValue('refinement message')
+  generateRefinementMessage: vi.fn().mockReturnValue('refinement message'),
+  generatePrAgentMessage: vi.fn().mockReturnValue('pr message'),
+  generatePrAgentCommentMessage: vi.fn().mockReturnValue('pr comment message'),
+  generatePrAgentReviewMessage: vi.fn().mockReturnValue('pr review message'),
+  generateYoloMessage: vi.fn().mockReturnValue('yolo message')
 }));
 
 vi.mock('./worktree.js', () => ({
   getWorktreePath: vi.fn(),
   getWorktreeProjectPath: vi.fn(),
-  worktreeExists: vi.fn()
+  worktreeExists: vi.fn(),
+  getPullRequestStatus: vi.fn().mockResolvedValue({ success: true, exists: false }),
+  rebaseOnMain: vi.fn().mockResolvedValue({ success: true })
 }));
 
 vi.mock('./claudeCredentials.js', () => ({
@@ -100,7 +106,7 @@ import {
   generateReviewMessage,
   generateRefinementMessage
 } from '../constants/agentPrompts.js';
-import { getWorktreeProjectPath, worktreeExists } from './worktree.js';
+import { getWorktreeProjectPath, worktreeExists, rebaseOnMain } from './worktree.js';
 import { loadAgentModelSettings } from './agentModelSettings.js';
 
 describe('agentRunner', () => {
@@ -439,6 +445,32 @@ describe('agentRunner', () => {
           videoConfig: null
         })
       );
+    });
+
+    it('rebases the branch onto main before starting the PR agent', async () => {
+      vi.mocked(rebaseOnMain).mockResolvedValueOnce({ success: true });
+
+      await startAgentRun(1, 'pr');
+
+      expect(rebaseOnMain).toHaveBeenCalledWith('/path/to/project', 1);
+      expect(startConversation).toHaveBeenCalledWith(
+        1,
+        'pr message',
+        expect.any(Object)
+      );
+    });
+
+    it('still starts the PR agent when the pre-rebase hits conflicts', async () => {
+      vi.mocked(rebaseOnMain).mockResolvedValueOnce({
+        success: false,
+        conflicts: true,
+        error: 'CONFLICT',
+      });
+
+      await startAgentRun(1, 'pr');
+
+      expect(rebaseOnMain).toHaveBeenCalledWith('/path/to/project', 1);
+      expect(startConversation).toHaveBeenCalledWith(1, 'pr message', expect.any(Object));
     });
   });
 
