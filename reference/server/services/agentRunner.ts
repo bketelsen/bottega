@@ -12,7 +12,7 @@ import { tasksDb, agentRunsDb, conversationsDb, userDb } from '../database/db.js
 import { startConversation } from './conversationAdapter.js';
 import { updateUserBadge } from './notifications.js';
 import { buildContextPrompt, getTaskDocPath, getRecordingPath } from './documentation.js';
-import { getWorktreeProjectPath, worktreeExists, getPullRequestStatus } from './worktree.js';
+import { getWorktreeProjectPath, worktreeExists, getPullRequestStatus, rebaseOnMain } from './worktree.js';
 import { getCredentialStore } from './credentials/registry.js';
 import { ProviderCredentialsMissingError } from './credentials/types.js';
 import {
@@ -98,6 +98,24 @@ export async function startAgentRun(
       message = await generateRefinementMessage(taskDocPath, taskId);
       break;
     case 'pr': {
+      // Before the PR agent runs, deterministically bring the branch up to
+      // date with origin/<main>. A task can sit behind main after a long
+      // implement⇄review loop; a clean rebase here means the PR is mergeable
+      // without relying on the model. If the rebase hits conflicts it is
+      // safely aborted (see rebaseOnMain) and the PR prompt resolves them.
+      const rebaseResult = await rebaseOnMain(taskWithProject.repo_folder_path, taskId);
+      if (rebaseResult.success) {
+        console.log(`[AgentRunner] Rebased task ${taskId} branch onto main before PR agent`);
+      } else if (rebaseResult.conflicts) {
+        console.log(
+          `[AgentRunner] Rebase of task ${taskId} hit conflicts; PR agent will resolve them`,
+        );
+      } else {
+        console.warn(
+          `[AgentRunner] Could not rebase task ${taskId} before PR agent: ${rebaseResult.error}`,
+        );
+      }
+
       // IMPORTANT: Use main repo path (not worktree path) for getPullRequestStatus
       // getPullRequestStatus internally derives the worktree path from repo + taskId
       const prStatus = await getPullRequestStatus(taskWithProject.repo_folder_path, taskId);

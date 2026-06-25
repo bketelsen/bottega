@@ -197,11 +197,25 @@ export async function createWorktree(
   try {
     await fs.promises.mkdir(worktreesDir, { recursive: true });
 
-    const baseBranch = assertValidBranchName(await getDefaultBranch(repoPath), 'default branch');
+    const defaultBranch = assertValidBranchName(await getDefaultBranch(repoPath), 'default branch');
+
+    // Branch off the *remote* tip so a task never starts life behind `main`.
+    // The local default branch can be stale (nobody pulls it between tasks);
+    // `origin/<main>` is the same ref the PR will eventually merge into. We
+    // fetch first so `origin/<main>` is current, then fall back to the local
+    // branch if the fetch failed (e.g. offline) so worktree creation still
+    // works without a network.
+    let baseRef = defaultBranch;
+    try {
+      await runCommand('git', ['fetch', 'origin', defaultBranch], { cwd: repoPath });
+      baseRef = assertValidBranchName(`origin/${defaultBranch}`, 'base ref');
+    } catch {
+      /* offline or no remote — fall back to the local default branch */
+    }
 
     await runCommand(
       'git',
-      ['worktree', 'add', '-b', assertValidBranchName(branch), worktreePath, baseBranch],
+      ['worktree', 'add', '-b', assertValidBranchName(branch), worktreePath, baseRef],
       { cwd: repoPath },
     );
 
@@ -314,26 +328,68 @@ export async function getWorktreeStatus(
   }
 }
 
+export interface RebaseResult {
+  success: boolean;
+  /** True when the rebase stopped on conflicts and the working tree was
+   *  rolled back with `git rebase --abort`. The branch is unchanged and an
+   *  agent should resolve the conflicts interactively. */
+  conflicts?: boolean;
+  error?: string;
+}
+
 /**
- * Sync a worktree with the main branch (merge main into worktree branch)
+ * Rebase a task's worktree branch onto the latest `origin/<main>`.
+ *
+ * This is the deterministic backstop for "the branch is a few commits behind
+ * main and can't merge cleanly." On a clean rebase the branch is fast-forwarded
+ * up to date. On conflicts we abort (leaving the worktree untouched) and report
+ * `conflicts: true` so the caller can hand the branch to the PR agent, whose
+ * prompt knows how to resolve conflicts during a rebase.
  */
-export async function syncWithMain(
+export async function rebaseOnMain(
   repoPath: string,
   taskId: number,
-): Promise<RemoveWorktreeResult> {
+): Promise<RebaseResult> {
   const worktreePath = getWorktreePath(repoPath, taskId);
 
   try {
     const mainBranch = assertValidBranchName(await getDefaultBranch(repoPath), 'default branch');
 
-    await runCommand('git', ['fetch', 'origin'], { cwd: worktreePath });
-    await runCommand('git', ['merge', `origin/${mainBranch}`], { cwd: worktreePath });
+    await runCommand('git', ['fetch', 'origin', mainBranch], { cwd: worktreePath });
 
-    return { success: true };
+    try {
+      await runCommand('git', ['rebase', `origin/${mainBranch}`], { cwd: worktreePath });
+      return { success: true };
+    } catch (rebaseError) {
+      // Leave the worktree in a clean state so an agent (or a retry) starts
+      // from a known-good branch rather than a half-applied rebase.
+      try {
+        await runCommand('git', ['rebase', '--abort'], { cwd: worktreePath });
+      } catch {
+        /* nothing in progress to abort */
+      }
+      const message = rebaseError instanceof Error ? rebaseError.message : String(rebaseError);
+      return { success: false, conflicts: true, error: message };
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { success: false, error: message };
   }
+}
+
+/**
+ * Sync a worktree with the main branch by rebasing onto `origin/<main>`.
+ *
+ * Backs the manual "Sync" button. Rebasing (rather than merging) keeps the
+ * branch history linear and consistent with the PR agent's conflict-resolution
+ * flow, which also rebases. A conflicting rebase is reported as a failure with
+ * `conflicts: true` after being safely aborted.
+ */
+export async function syncWithMain(
+  repoPath: string,
+  taskId: number,
+): Promise<RebaseResult> {
+  return rebaseOnMain(repoPath, taskId);
 }
 
 export interface CreatePRResult {

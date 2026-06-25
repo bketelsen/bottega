@@ -48,6 +48,7 @@ import {
   removeWorktree,
   getWorktreeStatus,
   syncWithMain,
+  rebaseOnMain,
   createPullRequest,
   getPullRequestStatus,
   mergeAndCleanup,
@@ -205,6 +206,33 @@ describe('Worktree Service', () => {
         (c) => c[0] === 'git' && (c[1] as string[]).includes('worktree'),
       );
       expect(worktreeAddCall).toBeDefined();
+      expect(worktreeAddCall![1]).toEqual([
+        'worktree',
+        'add',
+        '-b',
+        'task/15-add-user-login',
+        '/home/user/repo-worktrees/task-15',
+        'origin/main',
+      ]);
+    });
+
+    it('falls back to the local default branch when the fetch fails (offline)', async () => {
+      withDispatch(async (cmd, args) => {
+        if (args.includes('symbolic-ref')) {
+          return { stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        }
+        if (cmd === 'git' && args[0] === 'fetch') {
+          throw new Error('fatal: unable to access remote');
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await createWorktree('/home/user/repo', 15, 'Add User Login');
+
+      expect(result.success).toBe(true);
+      const worktreeAddCall = mockRunCommand.mock.calls.find(
+        (c) => c[0] === 'git' && (c[1] as string[]).includes('worktree'),
+      );
       expect(worktreeAddCall![1]).toEqual([
         'worktree',
         'add',
@@ -393,8 +421,61 @@ describe('Worktree Service', () => {
     });
   });
 
+  describe('rebaseOnMain', () => {
+    it('fetches and rebases onto origin/<main>', async () => {
+      withDispatch(async (_cmd, args) => {
+        if (args.includes('symbolic-ref')) return { stdout: 'main\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await rebaseOnMain('/repo', 10);
+
+      expect(result.success).toBe(true);
+      const fetchCall = mockRunCommand.mock.calls.find((c) => (c[1] as string[])[0] === 'fetch');
+      expect(fetchCall![1]).toEqual(['fetch', 'origin', 'main']);
+      const rebaseCall = mockRunCommand.mock.calls.find((c) => (c[1] as string[])[0] === 'rebase');
+      expect(rebaseCall![1]).toEqual(['rebase', 'origin/main']);
+    });
+
+    it('aborts and reports conflicts when the rebase fails', async () => {
+      const abortCalls: string[][] = [];
+      withDispatch(async (_cmd, args) => {
+        if (args.includes('symbolic-ref')) return { stdout: 'main\n', stderr: '' };
+        if (args[0] === 'rebase' && args[1] === 'origin/main') {
+          throw new Error('CONFLICT (content): Merge conflict in src/foo.ts');
+        }
+        if (args[0] === 'rebase' && args[1] === '--abort') {
+          abortCalls.push(args as string[]);
+          return { stdout: '', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await rebaseOnMain('/repo', 10);
+
+      expect(result.success).toBe(false);
+      expect(result.conflicts).toBe(true);
+      expect(result.error).toContain('CONFLICT');
+      expect(abortCalls).toHaveLength(1);
+    });
+
+    it('reports a plain failure (no conflicts flag) when the fetch fails', async () => {
+      withDispatch(async (_cmd, args) => {
+        if (args.includes('symbolic-ref')) return { stdout: 'main\n', stderr: '' };
+        if (args[0] === 'fetch') throw new Error('network down');
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await rebaseOnMain('/repo', 10);
+
+      expect(result.success).toBe(false);
+      expect(result.conflicts).toBeUndefined();
+      expect(result.error).toContain('network down');
+    });
+  });
+
   describe('syncWithMain', () => {
-    it('passes the main branch as an argv element', async () => {
+    it('rebases onto origin/<main> instead of merging', async () => {
       withDispatch(async (_cmd, args) => {
         if (args.includes('symbolic-ref')) return { stdout: 'main\n', stderr: '' };
         return { stdout: '', stderr: '' };
@@ -403,20 +484,25 @@ describe('Worktree Service', () => {
       const result = await syncWithMain('/repo', 10);
 
       expect(result.success).toBe(true);
+      const rebaseCall = mockRunCommand.mock.calls.find((c) => (c[1] as string[])[0] === 'rebase');
+      expect(rebaseCall![1]).toEqual(['rebase', 'origin/main']);
       const mergeCall = mockRunCommand.mock.calls.find((c) => (c[1] as string[]).includes('merge'));
-      expect(mergeCall![1]).toEqual(['merge', 'origin/main']);
+      expect(mergeCall).toBeUndefined();
     });
 
-    it('returns error on merge conflict', async () => {
+    it('reports conflicts (aborted) on a conflicting rebase', async () => {
       withDispatch(async (_cmd, args) => {
         if (args.includes('symbolic-ref')) return { stdout: 'main\n', stderr: '' };
-        if (args.includes('merge')) throw new Error('merge conflict');
+        if (args[0] === 'rebase' && args[1] === 'origin/main') {
+          throw new Error('merge conflict');
+        }
         return { stdout: '', stderr: '' };
       });
 
       const result = await syncWithMain('/repo', 10);
 
       expect(result.success).toBe(false);
+      expect(result.conflicts).toBe(true);
       expect(result.error).toContain('merge conflict');
     });
   });
