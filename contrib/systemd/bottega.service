@@ -1,0 +1,43 @@
+# Bottega systemd unit (template)
+#
+# This is a TEMPLATE. Copy it into place and edit the marked values before use.
+# See contrib/systemd/README.md for full instructions.
+#
+# Designed to run as a per-user service (`systemd --user`), so no root is
+# required and the agent runs as your own user with your own credentials.
+
+[Unit]
+Description=Bottega multi-agent orchestration server
+Documentation=https://github.com/vdaubry/bottega
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# --- EDIT THESE ---------------------------------------------------------------
+# Absolute path to the reference/ checkout (where prod-start.sh lives).
+WorkingDirectory=%h/bottega/reference
+
+# Launcher: prod-start.sh (full web UI) or headless-start.sh (API-only).
+ExecStart=%h/bottega/reference/prod-start.sh
+
+# Make sure node/pnpm/tsx are resolvable. Adjust to taste, e.g. point at an
+# nvm/fnm/volta install. The launchers also prepend /usr/bin themselves.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+# Configuration. Either rely on reference/.env (loaded by the app) or point at
+# an external env file here. JWT_SECRET is required.
+EnvironmentFile=%h/bottega/reference/.env
+# ------------------------------------------------------------------------------
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+# Light hardening (these are safe defaults for a user unit).
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target
