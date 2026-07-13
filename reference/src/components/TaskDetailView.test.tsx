@@ -236,6 +236,40 @@ describe('TaskDetailView Component', () => {
       expect(screen.getByTestId('conversation-list')).toBeInTheDocument();
       expect(screen.getByTestId('conv-count')).toHaveTextContent('2');
     });
+
+    it('renders linked GitHub issue and pull request URLs', () => {
+      render(
+        <TaskDetailView
+          {...defaultProps}
+          project={{ ...mockProject, github_repo: 'owner/repo' }}
+          task={{
+            ...mockTask,
+            github_issue_number: 12,
+            github_pr_number: 34,
+          }}
+        />,
+      );
+
+      expect(screen.getByRole('link', { name: /Issue #12/ })).toHaveAttribute(
+        'href',
+        'https://github.com/owner/repo/issues/12',
+      );
+      expect(screen.getByRole('link', { name: /PR #34/ })).toHaveAttribute(
+        'href',
+        'https://github.com/owner/repo/pull/34',
+      );
+    });
+
+    it('does not render task links without a linked GitHub repository', () => {
+      render(
+        <TaskDetailView
+          {...defaultProps}
+          task={{ ...mockTask, github_issue_number: 12 }}
+        />,
+      );
+
+      expect(screen.queryByText('Issue #12')).not.toBeInTheDocument();
+    });
   });
 
   describe('Status Display', () => {

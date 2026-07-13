@@ -8,6 +8,7 @@ import type {
   AgentRunStatus,
   AgentType,
   AppSettingRow,
+  AutonomyTier,
   ConversationRow,
   ProjectMemberRow,
   ProjectRow,
@@ -18,6 +19,8 @@ import type {
   UserAgentModelSettingsRow,
 } from '../../shared/types/db.js';
 import { DEFAULT_AGENT_MODEL_SETTINGS } from '../../shared/types/agentModelSettings.js';
+import { normalizeGitHubRepository } from '../../shared/schemas/github.js';
+import { enforceGitHubIdentityConstraints } from './githubMigrations.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -204,6 +207,20 @@ const runMigrations = (): void => {
     if (!taskColumnNames.includes('yolo_mode')) {
       console.log('Running migration: Adding yolo_mode column to tasks');
       db.exec('ALTER TABLE tasks ADD COLUMN yolo_mode INTEGER DEFAULT 0 NOT NULL');
+    }
+
+    const githubTaskColumns: ReadonlyArray<[string, string]> = [
+      ['github_issue_number', 'INTEGER'],
+      ['github_pr_number', 'INTEGER'],
+      ['github_plan_comment_id', 'INTEGER'],
+      ['github_last_human_comment_id', 'INTEGER'],
+      ['github_pr_evidence_hash', 'TEXT'],
+    ];
+    for (const [name, type] of githubTaskColumns) {
+      if (!taskColumnNames.includes(name)) {
+        console.log(`Running migration: Adding ${name} column to tasks`);
+        db.exec(`ALTER TABLE tasks ADD COLUMN ${name} ${type}`);
+      }
     }
 
     try {
@@ -450,6 +467,25 @@ const runMigrations = (): void => {
       db.exec('ALTER TABLE projects ADD COLUMN app_url TEXT DEFAULT NULL');
     }
 
+    if (!projectColumnNames.includes('github_repo')) {
+      console.log('Running migration: Adding github_repo column to projects');
+      db.exec('ALTER TABLE projects ADD COLUMN github_repo TEXT');
+    }
+
+    if (!projectColumnNames.includes('github_automation_enabled')) {
+      console.log('Running migration: Adding github_automation_enabled column to projects');
+      db.exec(
+        'ALTER TABLE projects ADD COLUMN github_automation_enabled INTEGER NOT NULL DEFAULT 0 CHECK (github_automation_enabled IN (0, 1))',
+      );
+    }
+
+    if (!projectColumnNames.includes('autonomy_tier')) {
+      console.log('Running migration: Adding autonomy_tier column to projects');
+      db.exec(
+        "ALTER TABLE projects ADD COLUMN autonomy_tier TEXT NOT NULL DEFAULT 'advisory' CHECK (autonomy_tier IN ('advisory', 'issues', 'pr', 'automerge'))",
+      );
+    }
+
     if (!columnNames.includes('is_admin')) {
       console.log('Running migration: Adding is_admin column to users');
       db.exec('ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0');
@@ -546,6 +582,10 @@ const runMigrations = (): void => {
     `);
 
     backfillUserAgentModelSettings(db);
+
+    // Legacy tables only gain these columns above, and task_agent_runs may be
+    // rebuilt by earlier migrations, so identity and running indexes come last.
+    enforceGitHubIdentityConstraints(db);
 
     console.log('Database migrations completed successfully');
   } catch (error) {
@@ -825,6 +865,9 @@ export interface ProjectUpdates {
   name?: string;
   repo_folder_path?: string;
   subproject_path?: string | null;
+  github_repo?: string | null;
+  github_automation_enabled?: 0 | 1 | boolean;
+  autonomy_tier?: AutonomyTier;
 }
 
 export interface WebServerConfig {
@@ -904,6 +947,9 @@ const projectsDb = {
       'name',
       'repo_folder_path',
       'subproject_path',
+      'github_repo',
+      'github_automation_enabled',
+      'autonomy_tier',
     ];
     const setClause: string[] = [];
     const values: unknown[] = [];
@@ -911,7 +957,14 @@ const projectsDb = {
     for (const field of allowedFields) {
       if (updates[field] !== undefined) {
         setClause.push(`${field} = ?`);
-        values.push(updates[field]);
+        const value = updates[field];
+        values.push(
+          field === 'github_repo' && typeof value === 'string'
+            ? normalizeGitHubRepository(value)
+            : typeof value === 'boolean'
+              ? value ? 1 : 0
+              : value,
+        );
       }
     }
 
@@ -974,6 +1027,22 @@ const projectsDb = {
     ).run(serveSymlinkPath || null, systemdServiceName || null, appUrl || null, id);
     return projectsDb.getById(id, userId);
   },
+
+  getByGithubRepo: (githubRepo: string): ProjectRow | undefined => {
+    return db
+      .prepare('SELECT * FROM projects WHERE github_repo = ? COLLATE NOCASE')
+      .get(normalizeGitHubRepository(githubRepo)) as ProjectRow | undefined;
+  },
+
+  getGithubAutomationEnabled: (): ProjectRow[] => {
+    return db
+      .prepare(
+        `SELECT * FROM projects
+         WHERE github_repo IS NOT NULL AND github_automation_enabled = 1
+         ORDER BY id ASC`,
+      )
+      .all() as ProjectRow[];
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -987,6 +1056,11 @@ export interface CreatedTask {
   title: string | null;
   status: 'pending';
   yolo_mode: 0 | 1;
+}
+
+export interface TaskExternalIdentity {
+  githubIssueNumber?: number | null;
+  githubPrNumber?: number | null;
 }
 
 // Result of getAll (joins project name + repo path).
@@ -1011,6 +1085,11 @@ export interface TaskUpdates {
   refinement_complete?: 0 | 1 | boolean;
   completed_at?: string | null;
   yolo_mode?: 0 | 1 | boolean;
+  github_issue_number?: number | null;
+  github_pr_number?: number | null;
+  github_plan_comment_id?: number | null;
+  github_last_human_comment_id?: number | null;
+  github_pr_evidence_hash?: string | null;
 }
 
 const tasksDb = {
@@ -1018,13 +1097,25 @@ const tasksDb = {
     projectId: number,
     title: string | null = null,
     yoloMode: boolean = false,
-    userId: number | null = null
+    userId: number | null = null,
+    externalIdentity: TaskExternalIdentity = {},
   ): CreatedTask => {
     const stmt = db.prepare(
-      'INSERT INTO tasks (project_id, user_id, title, status, yolo_mode) VALUES (?, ?, ?, ?, ?)'
+      `INSERT INTO tasks (
+         project_id, user_id, title, status, yolo_mode,
+         github_issue_number, github_pr_number
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     const yoloFlag: 0 | 1 = yoloMode ? 1 : 0;
-    const result = stmt.run(projectId, userId, title, 'pending', yoloFlag);
+    const result = stmt.run(
+      projectId,
+      userId,
+      title,
+      'pending',
+      yoloFlag,
+      externalIdentity.githubIssueNumber ?? null,
+      externalIdentity.githubPrNumber ?? null,
+    );
     return {
       id: lastInsertId(result.lastInsertRowid),
       projectId,
@@ -1065,6 +1156,18 @@ const tasksDb = {
     return db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | undefined;
   },
 
+  getByGithubIssue: (projectId: number, issueNumber: number): TaskRow | undefined => {
+    return db
+      .prepare('SELECT * FROM tasks WHERE project_id = ? AND github_issue_number = ?')
+      .get(projectId, issueNumber) as TaskRow | undefined;
+  },
+
+  getByGithubPr: (projectId: number, prNumber: number): TaskRow | undefined => {
+    return db
+      .prepare('SELECT * FROM tasks WHERE project_id = ? AND github_pr_number = ?')
+      .get(projectId, prNumber) as TaskRow | undefined;
+  },
+
   getWithProject: (taskId: number): TaskWithProject | undefined => {
     return db
       .prepare(
@@ -1089,6 +1192,11 @@ const tasksDb = {
       'refinement_complete',
       'completed_at',
       'yolo_mode',
+      'github_issue_number',
+      'github_pr_number',
+      'github_plan_comment_id',
+      'github_last_human_comment_id',
+      'github_pr_evidence_hash',
     ];
     const setClause: string[] = [];
     const values: unknown[] = [];
@@ -1570,6 +1678,7 @@ export type {
   AgentRunRow,
   AgentType,
   AgentRunStatus,
+  AutonomyTier,
   AppSettingRow,
   UserAgentModelSettingsRow,
 };

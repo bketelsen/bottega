@@ -7,6 +7,9 @@ vi.mock('../../database/db.js', () => ({
     markRefinementComplete: vi.fn(),
     blockWorkflow: vi.fn()
   },
+  projectsDb: {
+    getByIdAdmin: vi.fn()
+  },
   agentRunsDb: {
     getByTask: vi.fn().mockReturnValue([]),
     updateStatus: vi.fn(),
@@ -30,14 +33,20 @@ vi.mock('../agentRunner.js', () => ({
   getRunningAgentForTask: vi.fn().mockReturnValue(null)
 }));
 
+vi.mock('../github/reconcile.js', () => ({
+  syncPlannedTaskToGitHub: vi.fn().mockResolvedValue(true),
+  syncTaskPullRequest: vi.fn().mockResolvedValue(42)
+}));
+
 import {
   buildAgentRunCompletionHandler,
   MAX_WORKFLOW_RUNS
 } from './agentRunLifecycle.js';
-import { tasksDb, agentRunsDb, userDb } from '../../database/db.js';
+import { tasksDb, agentRunsDb, projectsDb, userDb } from '../../database/db.js';
 import { worktreeExists } from '../worktree.js';
 import { notifyClaudeComplete } from '../notifications.js';
 import { startAgentRun, getRunningAgentForTask } from '../agentRunner.js';
+import { syncPlannedTaskToGitHub, syncTaskPullRequest } from '../github/reconcile.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -46,6 +55,12 @@ beforeEach(() => {
   vi.mocked(worktreeExists).mockResolvedValue(false);
   vi.mocked(getRunningAgentForTask).mockReturnValue(null);
   vi.mocked(startAgentRun).mockResolvedValue(undefined as never);
+  vi.mocked(projectsDb.getByIdAdmin).mockReturnValue({
+    id: 1,
+    github_repo: 'acme/repo',
+    github_automation_enabled: 1,
+    autonomy_tier: 'pr'
+  } as never);
 });
 
 afterEach(() => {
@@ -153,6 +168,60 @@ describe('buildAgentRunCompletionHandler', () => {
     expect(startAgentRun).toHaveBeenCalledWith(7, 'implementation', expect.objectContaining({ userId: 1 }));
   });
 
+  it('syncs GitHub-backed planning and never applies the non-technical auto-chain', async () => {
+    const c = ctx();
+    vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+      { id: 9, conversation_id: 100, agent_type: 'planification', status: 'running' }
+    ] as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({
+      id: 7,
+      project_id: 1,
+      github_issue_number: 31,
+      planification_complete: 1,
+      workflow_run_count: 0
+    } as never);
+    vi.mocked(userDb.getUserById).mockReturnValue({ id: 1, is_technical: 0 } as never);
+
+    await buildAgentRunCompletionHandler(c)();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(syncPlannedTaskToGitHub).toHaveBeenCalledWith(7);
+    expect(startAgentRun).not.toHaveBeenCalled();
+  });
+
+  it.each([0, undefined])('does not publish or chain GitHub-backed planning when completion is %s', async (planificationComplete) => {
+    const c = ctx();
+    vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+      { id: 9, conversation_id: 100, agent_type: 'planification', status: 'running' }
+    ] as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({
+      id: 7,
+      project_id: 1,
+      github_issue_number: 31,
+      planification_complete: planificationComplete,
+      workflow_run_count: 0
+    } as never);
+    vi.mocked(userDb.getUserById).mockReturnValue({ id: 1, is_technical: 0 } as never);
+
+    await buildAgentRunCompletionHandler(c)();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(syncPlannedTaskToGitHub).not.toHaveBeenCalled();
+    expect(startAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('syncs the task PR link when a PR agent completes', async () => {
+    const c = ctx();
+    vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+      { id: 9, conversation_id: 100, agent_type: 'pr', status: 'running' }
+    ] as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, project_id: 1 } as never);
+
+    await buildAgentRunCompletionHandler(c)();
+
+    expect(syncTaskPullRequest).toHaveBeenCalledWith(7);
+  });
+
   it('chains planification → implementation when the non-tech actor differs from the technical task owner', async () => {
     // Task owner is user 1 (technical); planification was run by user 2 (non-technical).
     const c = ctx({ userId: 2 });
@@ -218,6 +287,30 @@ describe('buildAgentRunCompletionHandler', () => {
     expect(startAgentRun).toHaveBeenCalledWith(7, 'review', expect.any(Object));
   });
 
+  it('continues the baseline loop for advisory GitHub-backed tasks', async () => {
+    const c = ctx();
+    vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+      { id: 9, conversation_id: 100, agent_type: 'implementation', status: 'running' }
+    ] as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({
+      id: 7,
+      project_id: 1,
+      github_issue_number: 31,
+      workflow_run_count: 1
+    } as never);
+    vi.mocked(projectsDb.getByIdAdmin).mockReturnValue({
+      id: 1,
+      github_repo: 'acme/repo',
+      github_automation_enabled: 1,
+      autonomy_tier: 'advisory'
+    } as never);
+
+    await buildAgentRunCompletionHandler(c)();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(startAgentRun).toHaveBeenCalledWith(7, 'review', expect.any(Object));
+  });
+
   it('chains review → implementation when not workflow_complete', async () => {
     const c = ctx();
     vi.mocked(agentRunsDb.getByTask).mockReturnValue([
@@ -244,6 +337,31 @@ describe('buildAgentRunCompletionHandler', () => {
     expect(startAgentRun).toHaveBeenCalledWith(7, 'refinement', expect.any(Object));
   });
 
+  it('starts refinement for advisory GitHub-backed tasks', async () => {
+    const c = ctx();
+    vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+      { id: 9, conversation_id: 100, agent_type: 'review', status: 'running' }
+    ] as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({
+      id: 7,
+      project_id: 1,
+      github_issue_number: 31,
+      workflow_complete: true,
+      refinement_complete: false
+    } as never);
+    vi.mocked(projectsDb.getByIdAdmin).mockReturnValue({
+      id: 1,
+      github_repo: 'acme/repo',
+      github_automation_enabled: 1,
+      autonomy_tier: 'advisory'
+    } as never);
+
+    await buildAgentRunCompletionHandler(c)();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(startAgentRun).toHaveBeenCalledWith(7, 'refinement', expect.any(Object));
+  });
+
   it('marks refinement complete and chains to PR when worktree exists', async () => {
     const c = ctx();
     vi.mocked(agentRunsDb.getByTask).mockReturnValue([
@@ -258,6 +376,34 @@ describe('buildAgentRunCompletionHandler', () => {
 
     await vi.advanceTimersByTimeAsync(1000);
     expect(startAgentRun).toHaveBeenCalledWith(7, 'pr', expect.any(Object));
+  });
+
+  it('rechecks PR autonomy after scheduling and before starting the PR agent', async () => {
+    const c = ctx();
+    vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+      { id: 9, conversation_id: 100, agent_type: 'refinement', status: 'running' }
+    ] as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({
+      id: 7,
+      project_id: 1,
+      github_issue_number: 31,
+      workflow_complete: true,
+      refinement_complete: false,
+      pr_agent_complete: false
+    } as never);
+    vi.mocked(tasksDb.getWithProject).mockReturnValue({ repo_folder_path: '/r', user_id: 1 } as never);
+    vi.mocked(worktreeExists).mockResolvedValue(true);
+
+    await buildAgentRunCompletionHandler(c)();
+    vi.mocked(projectsDb.getByIdAdmin).mockReturnValue({
+      id: 1,
+      github_repo: 'acme/repo',
+      github_automation_enabled: 1,
+      autonomy_tier: 'issues'
+    } as never);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(startAgentRun).not.toHaveBeenCalled();
   });
 
   it('blocks the workflow when run count hits MAX_WORKFLOW_RUNS', async () => {

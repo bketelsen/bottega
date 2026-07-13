@@ -22,6 +22,8 @@ export type { Provider };
 
 export type TaskStatus = 'pending' | 'in_progress' | 'in_review' | 'completed';
 
+export type AutonomyTier = 'advisory' | 'issues' | 'pr' | 'automerge';
+
 export type AgentType =
   | 'planification'
   | 'implementation'
@@ -73,6 +75,9 @@ export interface ProjectRow {
   serve_symlink_path: string | null;
   systemd_service_name: string | null;
   app_url: string | null;
+  github_repo: string | null;
+  github_automation_enabled: SqliteBoolean;
+  autonomy_tier: AutonomyTier;
   created_at: string;
   updated_at: string;
 }
@@ -101,6 +106,11 @@ export interface TaskRow {
   pr_agent_complete: SqliteBoolean;
   refinement_complete: SqliteBoolean;
   yolo_mode: SqliteBoolean;
+  github_issue_number: number | null;
+  github_pr_number: number | null;
+  github_plan_comment_id: number | null;
+  github_last_human_comment_id: number | null;
+  github_pr_evidence_hash: string | null;
   completed_at: string | null;
   created_at: string;
   updated_at: string;

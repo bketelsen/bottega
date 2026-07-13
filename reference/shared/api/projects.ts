@@ -4,7 +4,7 @@
 //  - /api/projects/:id/web-server*      (mounted via webServer.js)
 //  - /api/projects/:id/files            (inline handler in server/index.js)
 
-import type { ProjectRow } from '../types/db';
+import type { AutonomyTier, ProjectRow } from '../types/db';
 import { expectType } from './_common';
 
 // ---- Project CRUD ---------------------------------------------------------
@@ -19,10 +19,15 @@ export type ListProjectsResponse = ProjectRow[];
 
 export type GetProjectResponse = ProjectRow;
 
+export type ProjectAutonomyTier = AutonomyTier;
+
 export interface CreateProjectRequest {
   name: string;
   repoFolderPath: string;
   subprojectPath?: string;
+  githubRepo?: string | null;
+  githubAutomationEnabled?: boolean;
+  autonomyTier?: ProjectAutonomyTier;
 }
 
 export type CreateProjectResponse = ProjectRow;
@@ -31,6 +36,9 @@ export interface UpdateProjectRequest {
   name?: string | undefined;
   repoFolderPath?: string | undefined;
   subprojectPath?: string | undefined;
+  githubRepo?: string | null | undefined;
+  githubAutomationEnabled?: boolean | undefined;
+  autonomyTier?: ProjectAutonomyTier | undefined;
 }
 
 export type UpdateProjectResponse = ProjectRow;

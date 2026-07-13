@@ -180,6 +180,10 @@ export interface CreateWorktreeResult {
   error?: string;
 }
 
+export interface CreateWorktreeOptions {
+  existingBranch?: string;
+}
+
 /**
  * Create a worktree for a task
  */
@@ -188,36 +192,52 @@ export async function createWorktree(
   taskId: number,
   title: string | null | undefined,
   subprojectPath: string | null = null,
+  options: CreateWorktreeOptions = {},
 ): Promise<CreateWorktreeResult> {
   const sanitizedTitle = sanitizeTitle(title);
-  const branch = `task/${taskId}-${sanitizedTitle}`;
+  const branch = options.existingBranch ?? `task/${taskId}-${sanitizedTitle}`;
   const worktreesDir = getWorktreesDir(repoPath);
   const worktreePath = getWorktreePath(repoPath, taskId);
 
   try {
     await fs.promises.mkdir(worktreesDir, { recursive: true });
 
-    const defaultBranch = assertValidBranchName(await getDefaultBranch(repoPath), 'default branch');
+    const validatedBranch = assertValidBranchName(branch);
+    if (options.existingBranch) {
+      const remoteRef = assertValidBranchName(`origin/${validatedBranch}`, 'remote branch ref');
+      const refspec = `+refs/heads/${validatedBranch}:refs/remotes/origin/${validatedBranch}`;
+      try {
+        await runCommand('git', ['fetch', 'origin', refspec], { cwd: repoPath });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Failed to fetch existing branch ${JSON.stringify(validatedBranch)}: ${message}`,
+          { cause: error },
+        );
+      }
+      await runCommand(
+        'git',
+        ['worktree', 'add', '--track', '-b', validatedBranch, worktreePath, remoteRef],
+        { cwd: repoPath },
+      );
+    } else {
+      const defaultBranch = assertValidBranchName(await getDefaultBranch(repoPath), 'default branch');
 
-    // Branch off the *remote* tip so a task never starts life behind `main`.
-    // The local default branch can be stale (nobody pulls it between tasks);
-    // `origin/<main>` is the same ref the PR will eventually merge into. We
-    // fetch first so `origin/<main>` is current, then fall back to the local
-    // branch if the fetch failed (e.g. offline) so worktree creation still
-    // works without a network.
-    let baseRef = defaultBranch;
-    try {
-      await runCommand('git', ['fetch', 'origin', defaultBranch], { cwd: repoPath });
-      baseRef = assertValidBranchName(`origin/${defaultBranch}`, 'base ref');
-    } catch {
-      /* offline or no remote — fall back to the local default branch */
+      // Branch off the remote tip when available, but preserve offline task creation.
+      let baseRef = defaultBranch;
+      try {
+        await runCommand('git', ['fetch', 'origin', defaultBranch], { cwd: repoPath });
+        baseRef = assertValidBranchName(`origin/${defaultBranch}`, 'base ref');
+      } catch {
+        /* offline or no remote — fall back to the local default branch */
+      }
+
+      await runCommand(
+        'git',
+        ['worktree', 'add', '-b', validatedBranch, worktreePath, baseRef],
+        { cwd: repoPath },
+      );
     }
-
-    await runCommand(
-      'git',
-      ['worktree', 'add', '-b', assertValidBranchName(branch), worktreePath, baseRef],
-      { cwd: repoPath },
-    );
 
     const projectPath = subprojectPath ? path.join(worktreePath, subprojectPath) : worktreePath;
 
@@ -398,6 +418,12 @@ export interface CreatePRResult {
   error?: string;
 }
 
+export type GitHubEffectGuard = (action: 'push' | 'createPR') => void | Promise<void>;
+
+export interface GitHubEffectOptions {
+  beforeEffect?: GitHubEffectGuard;
+}
+
 /**
  * Create a pull request for a task's worktree branch
  */
@@ -406,8 +432,10 @@ export async function createPullRequest(
   taskId: number,
   title: string,
   body: string,
+  options: GitHubEffectOptions = {},
 ): Promise<CreatePRResult> {
   const worktreePath = getWorktreePath(repoPath, taskId);
+  let guardFailed = false;
 
   try {
     const branch = await getBranchName(worktreePath);
@@ -416,10 +444,22 @@ export async function createPullRequest(
     }
     assertValidBranchName(branch);
 
+    try {
+      await options.beforeEffect?.('push');
+    } catch (error) {
+      guardFailed = true;
+      throw error;
+    }
     await runCommand('git', ['push', '-u', 'origin', branch], { cwd: worktreePath });
 
     // Title and body pass straight through as argv. No escaping needed —
     // shell metacharacters inside title/body are literal bytes here.
+    try {
+      await options.beforeEffect?.('createPR');
+    } catch (error) {
+      guardFailed = true;
+      throw error;
+    }
     const { stdout } = await runCommand(
       'gh',
       ['pr', 'create', '--title', title, '--body', body],
@@ -428,6 +468,7 @@ export async function createPullRequest(
 
     return { success: true, url: stdout.trim() };
   } catch (error) {
+    if (guardFailed) throw error;
     const message = error instanceof Error ? error.message : String(error);
     return { success: false, error: message };
   }
@@ -654,8 +695,10 @@ export async function pushChanges(
   repoPath: string,
   taskId: number,
   commitMessage: string,
+  options: GitHubEffectOptions = {},
 ): Promise<PushChangesResult> {
   const worktreePath = getWorktreePath(repoPath, taskId);
+  let guardFailed = false;
 
   try {
     const { stdout: status } = await runCommand('git', ['status', '--porcelain'], {
@@ -672,10 +715,17 @@ export async function pushChanges(
       return { success: false, error: 'Could not determine worktree branch' };
     }
     assertValidBranchName(branch);
+    try {
+      await options.beforeEffect?.('push');
+    } catch (error) {
+      guardFailed = true;
+      throw error;
+    }
     await runCommand('git', ['push', 'origin', branch], { cwd: worktreePath });
 
     return { success: true };
   } catch (error) {
+    if (guardFailed) throw error;
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('nothing to commit') && message.includes('Everything up-to-date')) {
       return { success: true, message: 'Already up to date' };

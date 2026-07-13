@@ -9,7 +9,19 @@ vi.mock('../database/db.js', () => ({
     getById: vi.fn(),
     update: vi.fn(),
     delete: vi.fn()
+  },
+  userDb: {
+    getUserById: vi.fn(),
+    getGitConfig: vi.fn(),
   }
+}));
+
+vi.mock('../services/agentModelSettings.js', () => ({
+  loadAgentModelSettings: vi.fn(),
+}));
+
+vi.mock('../services/credentials/registry.js', () => ({
+  getCredentialStore: vi.fn(),
 }));
 
 // Mock the projectService
@@ -36,22 +48,34 @@ vi.mock('../middleware/upload.js', async () => {
 
 import projectsRoutes from './projects.js';
 import { projectsDb } from '../database/db.js';
+import { userDb } from '../database/db.js';
 import { getAllProjects, getProject, updateProject, deleteProject } from '../services/projectService.js';
 import { saveConversationUpload } from '../services/documentation.js';
+import { loadAgentModelSettings } from '../services/agentModelSettings.js';
+import { getCredentialStore } from '../services/credentials/registry.js';
 
 describe('Projects Routes - Phase 3', () => {
   let app: import("express").Application;
   const testUserId = 1;
+  let isAdmin: 0 | 1;
 
   beforeEach(() => {
     // Reset all mocks
     vi.clearAllMocks();
+    isAdmin = 0;
 
     // Create Express app with mocked auth
     app = express();
     app.use(express.json());
     app.use((req, res, next) => {
-      req.user = { id: testUserId, username: 'testuser' } as never;
+      req.user = {
+        id: testUserId,
+        username: 'testuser',
+        created_at: '',
+        last_login: null,
+        is_admin: isAdmin,
+        is_technical: 0,
+      };
       next();
     });
     app.use('/api/projects', projectsRoutes);
@@ -84,8 +108,16 @@ describe('Projects Routes - Phase 3', () => {
 
   describe('POST /api/projects', () => {
     it('should create a new project', async () => {
-      const newProject = { id: 1, userId: testUserId, name: 'New Project', repoFolderPath: '/path/new' };
-      vi.mocked(projectsDb.create).mockReturnValue(newProject as never);
+      const created = { id: 1, userId: testUserId, name: 'New Project', repoFolderPath: '/path/new' };
+      const newProject = {
+        id: 1,
+        user_id: testUserId,
+        name: 'New Project',
+        repo_folder_path: '/path/new',
+        created_at: '2026-07-13',
+      };
+      vi.mocked(projectsDb.create).mockReturnValue(created as never);
+      vi.mocked(projectsDb.getById).mockReturnValue(newProject as never);
 
       const response = await request(app)
         .post('/api/projects')
@@ -94,6 +126,43 @@ describe('Projects Routes - Phase 3', () => {
       expect(response.status).toBe(201);
       expect(response.body).toEqual(newProject);
       expect(projectsDb.create).toHaveBeenCalledWith(testUserId, 'New Project', '/path/new', null);
+    });
+
+    it('rejects GitHub settings from non-admin users', async () => {
+      const response = await request(app)
+        .post('/api/projects')
+        .send({
+          name: 'New Project',
+          repoFolderPath: '/path/new',
+          githubRepo: 'Owner/Repo',
+        });
+
+      expect(response.status).toBe(403);
+      expect(projectsDb.create).not.toHaveBeenCalled();
+    });
+
+    it('normalizes GitHub repositories on creation', async () => {
+      isAdmin = 1;
+      const created = { id: 1 };
+      const project = { id: 1, github_repo: 'owner/repo' };
+      vi.mocked(projectsDb.create).mockReturnValue(created as never);
+      vi.mocked(projectsDb.getById).mockReturnValue(project as never);
+      vi.mocked(updateProject).mockReturnValue(project as never);
+
+      const response = await request(app)
+        .post('/api/projects')
+        .send({
+          name: 'Project',
+          repoFolderPath: '/path/project',
+          githubRepo: '  https://github.com/Owner/Repo.git  ',
+        });
+
+      expect(response.status).toBe(201);
+      expect(updateProject).toHaveBeenCalledWith(1, testUserId, {
+        github_repo: 'owner/repo',
+        github_automation_enabled: 0,
+        autonomy_tier: 'advisory',
+      });
     });
 
     it('should return 400 if name is missing', async () => {
@@ -184,6 +253,93 @@ describe('Projects Routes - Phase 3', () => {
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Project not found');
+    });
+
+    it('allows non-admin users to update ordinary project fields', async () => {
+      const project = { id: 1, user_id: testUserId, name: 'Project', repo_folder_path: '/path/1' };
+      vi.mocked(getProject).mockReturnValue(project as never);
+      vi.mocked(updateProject).mockReturnValue({ ...project, name: 'Renamed' } as never);
+
+      const response = await request(app)
+        .put('/api/projects/1')
+        .send({ name: 'Renamed' });
+
+      expect(response.status).toBe(200);
+      expect(updateProject).toHaveBeenCalledWith(1, testUserId, { name: 'Renamed' });
+    });
+
+    it('rejects GitHub setting mutations from non-admin users', async () => {
+      const response = await request(app)
+        .put('/api/projects/1')
+        .send({ githubAutomationEnabled: false });
+
+      expect(response.status).toBe(403);
+      expect(updateProject).not.toHaveBeenCalled();
+    });
+
+    it('normalizes GitHub repos and enables automation when the owner is ready', async () => {
+      isAdmin = 1;
+      const project = {
+        id: 1,
+        user_id: testUserId,
+        name: 'Project',
+        repo_folder_path: '/path/1',
+        github_repo: null,
+        github_automation_enabled: 0,
+        autonomy_tier: 'advisory',
+      };
+      vi.mocked(getProject).mockReturnValue(project as never);
+      vi.mocked(userDb.getUserById).mockReturnValue({ id: testUserId } as never);
+      vi.mocked(loadAgentModelSettings).mockReturnValue({
+        planification: { provider: 'anthropic', model: 'sonnet', effort: 'high' },
+      } as never);
+      vi.mocked(getCredentialStore).mockReturnValue({
+        getStatus: vi.fn().mockResolvedValue({ authenticated: true }),
+      } as never);
+      vi.mocked(updateProject).mockReturnValue({
+        ...project,
+        github_repo: 'owner/repo',
+        github_automation_enabled: 1,
+      } as never);
+
+      const response = await request(app)
+        .put('/api/projects/1')
+        .send({
+          githubRepo: 'https://github.com/Owner/Repo.git',
+          githubAutomationEnabled: true,
+        });
+
+      expect(response.status).toBe(200);
+      expect(updateProject).toHaveBeenCalledWith(1, testUserId, {
+        github_repo: 'owner/repo',
+        github_automation_enabled: 1,
+      });
+    });
+
+    it('refuses to enable automation when owner credentials are missing', async () => {
+      isAdmin = 1;
+      vi.mocked(getProject).mockReturnValue({
+        id: 1,
+        user_id: testUserId,
+        github_repo: 'owner/repo',
+        github_automation_enabled: 0,
+        autonomy_tier: 'advisory',
+      } as never);
+      vi.mocked(userDb.getUserById).mockReturnValue({ id: testUserId } as never);
+      vi.mocked(loadAgentModelSettings).mockReturnValue({
+        planification: { provider: 'anthropic', model: 'sonnet', effort: 'high' },
+      } as never);
+      vi.mocked(getCredentialStore).mockReturnValue({
+        getStatus: vi.fn().mockResolvedValue({ authenticated: false }),
+      } as never);
+
+      const response = await request(app)
+        .put('/api/projects/1')
+        .send({ githubAutomationEnabled: true });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('connect anthropic');
+      expect(updateProject).not.toHaveBeenCalled();
     });
   });
 

@@ -577,6 +577,7 @@ Please:
   if (!task) return null;
 
   const currentStatus = STATUS_OPTIONS.find(s => s.value === task.status) ?? STATUS_OPTIONS[0]!;
+  const githubRepo = project?.github_repo;
 
   const handleStatusChange = async (newStatus: TaskStatus) => {
     if (newStatus === task.status || !onStatusChange) return;
@@ -651,6 +652,32 @@ Please:
             <p className="text-sm text-muted-foreground">
               Task #{task.id} in {project?.name || 'Unknown Project'}
             </p>
+            {githubRepo && (task.github_issue_number || task.github_pr_number) && (
+              <div className="mt-1 flex flex-wrap gap-3 text-sm">
+                {task.github_issue_number && (
+                  <a
+                    href={`https://github.com/${githubRepo}/issues/${task.github_issue_number}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-primary hover:underline"
+                  >
+                    Issue #{task.github_issue_number}
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+                {task.github_pr_number && (
+                  <a
+                    href={`https://github.com/${githubRepo}/pull/${task.github_pr_number}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-primary hover:underline"
+                  >
+                    PR #{task.github_pr_number}
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Workflow control: Resume (if blocked) or Mark Done */}

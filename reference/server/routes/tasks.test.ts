@@ -130,6 +130,12 @@ describe('Tasks Routes - Phase 3', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
+    vi.mocked(tasksDb.getById).mockImplementation(() => {
+      const latestCreate = vi.mocked(tasksDb.create).mock.results.at(-1);
+      return latestCreate?.type === 'return' ? latestCreate.value as never : undefined;
+    });
+    vi.mocked(getPullRequestStatus).mockResolvedValue({ success: true, exists: false });
+
     // Default to allowing access - tests can override if needed
     vi.mocked(hasProjectAccess).mockReturnValue(true);
 
@@ -274,7 +280,10 @@ describe('Tasks Routes - Phase 3', () => {
 
       expect(response.status).toBe(201);
       expect(response.body).toEqual(newTask);
-      expect(tasksDb.create).toHaveBeenCalledWith(1, 'New Task', false, testUserId);
+      expect(tasksDb.create).toHaveBeenCalledWith(1, 'New Task', false, testUserId, {
+        githubIssueNumber: null,
+        githubPrNumber: null,
+      });
       expect(writeTaskDoc).toHaveBeenCalledWith(1, 1, '');
     });
 
@@ -289,7 +298,10 @@ describe('Tasks Routes - Phase 3', () => {
         .send({});
 
       expect(response.status).toBe(201);
-      expect(tasksDb.create).toHaveBeenCalledWith(1, null, false, testUserId);
+      expect(tasksDb.create).toHaveBeenCalledWith(1, null, false, testUserId, {
+        githubIssueNumber: null,
+        githubPrNumber: null,
+      });
     });
 
     it('should forward yolo_mode=true when provided in body', async () => {
@@ -304,7 +316,10 @@ describe('Tasks Routes - Phase 3', () => {
         .send({ title: 'YOLO Task', yolo_mode: true });
 
       expect(response.status).toBe(201);
-      expect(tasksDb.create).toHaveBeenCalledWith(1, 'YOLO Task', true, testUserId);
+      expect(tasksDb.create).toHaveBeenCalledWith(1, 'YOLO Task', true, testUserId, {
+        githubIssueNumber: null,
+        githubPrNumber: null,
+      });
     });
 
     it('should return 404 if project not found', async () => {
@@ -1080,7 +1095,13 @@ describe('Tasks Routes - Phase 3', () => {
       expect(response.status).toBe(200);
       expect(hasUncommittedChanges).toHaveBeenCalledWith('/path/to/repo', 1);
       expect(commitAllChanges).not.toHaveBeenCalled();
-      expect(createPullRequest).toHaveBeenCalledWith('/path/to/repo', 1, 'Add feature', 'Description');
+      expect(createPullRequest).toHaveBeenCalledWith(
+        '/path/to/repo',
+        1,
+        'Add feature',
+        'Description',
+        expect.objectContaining({ beforeEffect: expect.any(Function) }),
+      );
       expect(response.body.success).toBe(true);
       expect(response.body.url).toBe('https://github.com/user/repo/pull/123');
     });
@@ -1109,7 +1130,13 @@ describe('Tasks Routes - Phase 3', () => {
       expect(hasUncommittedChanges).toHaveBeenCalledWith('/path/to/repo', 1);
       // Now uses PR title for commit message (via prService.createOrUpdatePR)
       expect(commitAllChanges).toHaveBeenCalledWith('/path/to/repo', 1, 'Add feature');
-      expect(createPullRequest).toHaveBeenCalledWith('/path/to/repo', 1, 'Add feature', 'Description');
+      expect(createPullRequest).toHaveBeenCalledWith(
+        '/path/to/repo',
+        1,
+        'Add feature',
+        'Description',
+        expect.objectContaining({ beforeEffect: expect.any(Function) }),
+      );
       expect(response.body.success).toBe(true);
     });
 
@@ -1209,7 +1236,61 @@ describe('Tasks Routes - Phase 3', () => {
         .post('/api/tasks/1/pull-request')
         .send({ title: 'Title only' });
 
-      expect(createPullRequest).toHaveBeenCalledWith('/path/to/repo', 1, 'Title only', '');
+      expect(createPullRequest).toHaveBeenCalledWith(
+        '/path/to/repo',
+        1,
+        'Title only',
+        '',
+        expect.objectContaining({ beforeEffect: expect.any(Function) }),
+      );
+    });
+
+    it('returns 403 when fresh automation state denies PR creation', async () => {
+      vi.mocked(tasksDb.getWithProject).mockReturnValue({
+        id: 1,
+        project_id: 1,
+        repo_folder_path: '/path/to/repo',
+      } as never);
+      vi.mocked(getProject).mockReturnValue({
+        id: 1,
+        github_repo: 'owner/repo',
+        github_automation_enabled: 0,
+        autonomy_tier: 'pr',
+      } as never);
+      vi.mocked(getWorktreeStatus).mockResolvedValue({ success: true, ahead: 1, behind: 0 });
+      vi.mocked(createPullRequest).mockImplementation(async (_repo, _task, _title, _body, options) => {
+        await options?.beforeEffect?.('push');
+        return { success: true };
+      });
+
+      const response = await request(app)
+        .post('/api/tasks/1/pull-request')
+        .send({ title: 'Title' });
+
+      expect(response.status).toBe(403);
+      expect(response.body.error).toContain('GitHub capability denied');
+    });
+
+    it('preserves manual PR behavior for local projects', async () => {
+      vi.mocked(tasksDb.getWithProject).mockReturnValue({
+        id: 1,
+        project_id: 1,
+        repo_folder_path: '/path/to/repo',
+      } as never);
+      vi.mocked(getProject).mockReturnValue({ id: 1, github_repo: null } as never);
+      vi.mocked(getWorktreeStatus).mockResolvedValue({ success: true, ahead: 1, behind: 0 });
+      vi.mocked(createPullRequest).mockImplementation(async (_repo, _task, _title, _body, options) => {
+        await options?.beforeEffect?.('push');
+        await options?.beforeEffect?.('createPR');
+        return { success: true, url: 'https://example.test/pull/1' };
+      });
+
+      const response = await request(app)
+        .post('/api/tasks/1/pull-request')
+        .send({ title: 'Title' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
     });
 
     it('should return 404 for non-existent task', async () => {
@@ -1472,7 +1553,12 @@ describe('Tasks Routes - Phase 3', () => {
       const response = await request(app).post('/api/tasks/1/push-changes');
 
       expect(response.status).toBe(200);
-      expect(pushChanges).toHaveBeenCalledWith('/path/to/repo', 1, 'My Task');
+      expect(pushChanges).toHaveBeenCalledWith(
+        '/path/to/repo',
+        1,
+        'My Task',
+        expect.objectContaining({ beforeEffect: expect.any(Function) }),
+      );
       expect(response.body.success).toBe(true);
     });
 
@@ -1491,7 +1577,12 @@ describe('Tasks Routes - Phase 3', () => {
         .send({ commitMessage: 'Custom commit message' });
 
       expect(response.status).toBe(200);
-      expect(pushChanges).toHaveBeenCalledWith('/path/to/repo', 1, 'Custom commit message');
+      expect(pushChanges).toHaveBeenCalledWith(
+        '/path/to/repo',
+        1,
+        'Custom commit message',
+        expect.objectContaining({ beforeEffect: expect.any(Function) }),
+      );
     });
 
     it('should fallback to Task #id if no title', async () => {
@@ -1507,7 +1598,36 @@ describe('Tasks Routes - Phase 3', () => {
       const response = await request(app).post('/api/tasks/1/push-changes');
 
       expect(response.status).toBe(200);
-      expect(pushChanges).toHaveBeenCalledWith('/path/to/repo', 1, 'Task #1');
+      expect(pushChanges).toHaveBeenCalledWith(
+        '/path/to/repo',
+        1,
+        'Task #1',
+        expect.objectContaining({ beforeEffect: expect.any(Function) }),
+      );
+    });
+
+    it('returns 403 when fresh automation state denies pushing', async () => {
+      vi.mocked(tasksDb.getWithProject).mockReturnValue({
+        id: 1,
+        project_id: 1,
+        title: 'My Task',
+        repo_folder_path: '/path/to/repo',
+      } as never);
+      vi.mocked(getProject).mockReturnValue({
+        id: 1,
+        github_repo: 'owner/repo',
+        github_automation_enabled: 1,
+        autonomy_tier: 'issues',
+      } as never);
+      vi.mocked(pushChanges).mockImplementation(async (_repo, _task, _message, options) => {
+        await options?.beforeEffect?.('push');
+        return { success: true };
+      });
+
+      const response = await request(app).post('/api/tasks/1/push-changes');
+
+      expect(response.status).toBe(403);
+      expect(response.body.error).toContain('GitHub capability denied');
     });
 
     it('should return error on push failure', async () => {

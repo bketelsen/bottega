@@ -12,7 +12,8 @@
 // module, so a static import would create a load-time cycle. Keep it
 // dynamic.
 
-import { tasksDb, agentRunsDb, userDb } from '../../database/db.js';
+import { tasksDb, agentRunsDb, projectsDb, userDb } from '../../database/db.js';
+import { can } from '../github/capabilities.js';
 import { worktreeExists } from '../worktree.js';
 import { notifyClaudeComplete } from '../notifications.js';
 import type { StreamingContext } from './types.js';
@@ -21,6 +22,13 @@ import type { AgentType } from '@shared/websocket/messages';
 // Maximum number of agent iterations before auto-blocking (prevents infinite loops).
 // Only affects automatic agent chaining, not manual conversations.
 export const MAX_WORKFLOW_RUNS = 25;
+
+function githubPrAutomationAllowed(taskId: number): boolean {
+  const task = tasksDb.getById(taskId);
+  if (!task?.github_issue_number && !task?.github_pr_number) return true;
+  const project = projectsDb.getByIdAdmin(task.project_id);
+  return Boolean(project && can(project, 'push') && can(project, 'createPR'));
+}
 
 /**
  * Build an `onComplete` handler for a streaming session. The returned
@@ -75,11 +83,33 @@ export function buildAgentRunCompletionHandler(
           });
         }
 
+        let githubPlanningTerminal = false;
+        const completedTask = tasksDb.getById(taskId);
+        if (agentType === 'planification' && completedTask?.github_issue_number) {
+          githubPlanningTerminal = true;
+          if (completedTask.planification_complete) {
+            try {
+              const { syncPlannedTaskToGitHub } = await import('../github/reconcile.js');
+              await syncPlannedTaskToGitHub(taskId);
+            } catch (err) {
+              console.error(`[ConversationAdapter] Failed to sync planned task ${taskId} to GitHub:`, err);
+            }
+          }
+        } else if (agentType === 'pr') {
+          try {
+            const { syncTaskPullRequest } = await import('../github/reconcile.js');
+            await syncTaskPullRequest(taskId);
+          } catch (err) {
+            console.error(`[ConversationAdapter] Failed to sync task ${taskId} PR link:`, err);
+          }
+        }
+
         // Chain implementation/review/refinement, plus planification for
         // non-technical owners (handleAgentChaining decides per-owner).
-        // PR agent is terminal — no chaining after it completes.
+        // GitHub-backed planning and the PR agent are terminal here: GitHub
+        // approval/reconciliation owns their next transition.
         if (
-          agentType === 'planification' ||
+          (agentType === 'planification' && !githubPlanningTerminal) ||
           agentType === 'implementation' ||
           agentType === 'review' ||
           agentType === 'refinement'
@@ -197,6 +227,7 @@ async function handleAgentChaining(
         const { startAgentRun } = await import('../agentRunner.js');
         setTimeout(async () => {
           try {
+            if (!githubPrAutomationAllowed(taskId)) return;
             await startAgentRun(taskId, 'pr', { broadcastFn, broadcastToTaskSubscribersFn, userId });
           } catch (err) {
             console.error(`[ConversationAdapter] Failed to start PR agent:`, err);
@@ -248,7 +279,6 @@ async function handleAgentChaining(
         console.log(`[ConversationAdapter] Task ${taskId} workflow blocked (re-check), stopping loop`);
         return;
       }
-
       const runningAgent = getRunningAgentForTask(taskId);
       if (runningAgent) {
         console.log(`[ConversationAdapter] Another agent already running, skipping chain`);

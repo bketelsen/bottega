@@ -69,6 +69,7 @@ This directory is organized by architectural concern. Pull whichever file matche
 | **[`task-management.md`](./task-management.md)** | The domain model (projects / tasks / conversations), the SQLite schema, `TaskContext` state + navigation, URL routing, the 4-screen UI flow. |
 | **[`authentication.md`](./authentication.md)** | App-level auth (JWT + per-user API keys, NOT Claude OAuth), `token_version` invalidation, rate limiting, the project-membership authorization model, admin panel, `is_technical`. |
 | **[`api-reference.md`](./api-reference.md)** | Flat lookup table of REST endpoints and WebSocket message types. Read the topical docs for the **why**; read this for the **shape**. |
+| **[`yeti-migration-plan.md`](./yeti-migration-plan.md)** | Concrete, minimal migration plan for folding Yeti's GitHub automation into Bottega's task and agent runtime. |
 
 ## Tech stack
 

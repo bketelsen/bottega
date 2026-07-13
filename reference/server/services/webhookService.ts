@@ -1,290 +1,177 @@
-/**
- * Webhook Service
- *
- * Handles GitHub webhook signature validation, task identification,
- * and PR agent triggering for @-mentions in PR comments. The trigger
- * string itself is read from app_settings (configurable per instance).
- */
-
 import crypto from 'crypto';
-import { tasksDb, userDb, agentRunsDb, appSettingsDb } from '../database/db.js';
-import { worktreeExists } from './worktree.js';
-import type {
-  BroadcastFn,
-  BroadcastToConversationSubscribersFn,
-  BroadcastToTaskSubscribersFn,
-} from '@shared/websocket/messages';
+import { projectsDb } from '../database/db.js';
+import {
+  reconcileApprovedIssue,
+  reconcilePullRequest,
+  reconcileRefinementIssue,
+} from './github/reconcile.js';
+import {
+  BOTTEGA_COMMENT_MARKER,
+  githubIdentity,
+  isBottegaComment,
+} from './github/identity.js';
+import { hasGitHubPrTriggerMention } from './github/trigger.js';
 
-/**
- * Validate GitHub webhook signature using HMAC-SHA256
- */
+export { BOTTEGA_COMMENT_MARKER, isBottegaComment };
+
+const SUPPORTED_EVENTS = new Set([
+  'issues',
+  'issue_comment',
+  'pull_request',
+  'pull_request_review',
+  'pull_request_review_comment',
+  'check_run',
+  'check_suite',
+]);
+
+const ISSUE_ACTIONS = new Set(['opened', 'edited', 'labeled', 'unlabeled', 'reopened']);
+const COMMENT_ACTIONS = new Set(['created', 'edited']);
+const PR_ACTIONS = new Set(['opened', 'reopened', 'synchronize', 'ready_for_review']);
+const REVIEW_ACTIONS = new Set(['submitted', 'edited', 'dismissed']);
+const CHECK_ACTIONS = new Set(['completed', 'rerequested', 'requested_action']);
+
+let acceptingWebhooks = true;
+const pendingWebhooks = new Set<Promise<void>>();
+
 export function validateGitHubWebhookSignature(
   payload: Buffer | string,
   signature: string | undefined,
   secret: string | undefined,
 ): boolean {
-  if (!signature || !secret) {
-    return false;
-  }
+  if (!signature || !secret) return false;
 
-  const payloadString = typeof payload === 'string' ? payload : payload.toString();
-  const expectedSignature =
-    'sha256=' + crypto.createHmac('sha256', secret).update(payloadString, 'utf8').digest('hex');
-
+  const expected = `sha256=${crypto
+    .createHmac('sha256', secret)
+    .update(payload)
+    .digest('hex')}`;
   try {
-    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
+    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
   } catch {
     return false;
   }
 }
 
-/**
- * Parse task ID from branch name
- * Expected format: task/{id}-{slug}
- */
-export function parseTaskIdFromBranch(branchName: string | null | undefined): number | null {
-  if (!branchName) return null;
-  const match = branchName.match(/^task\/(\d+)-/);
-  if (match?.[1]) {
-    return parseInt(match[1], 10);
-  }
-  return null;
+export function isSupportedGitHubEvent(event: string): boolean {
+  return SUPPORTED_EVENTS.has(event);
 }
 
-/**
- * Resolve the configured GitHub PR @-trigger from app_settings.
- * Falls back to the default ("bottega") if the table is unavailable.
- */
-export function getConfiguredTrigger(): string {
-  try {
-    return appSettingsDb.getValue('github_pr_trigger') || 'bottega';
-  } catch {
-    return 'bottega';
+function numberAt(value: unknown, key: string): number | null {
+  const number = (value as Record<string, unknown> | undefined)?.[key];
+  return typeof number === 'number' && Number.isInteger(number) && number > 0 ? number : null;
+}
+
+function pullRequestNumbers(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .map((pullRequest) => numberAt(pullRequest, 'number'))
+    .filter((number): number is number => number !== null))];
+}
+
+/** Route one accepted delivery through the same idempotent reconciliation used by polling. */
+export async function dispatchGitHubWebhook(
+  event: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const repository = (payload.repository as { full_name?: unknown } | undefined)?.full_name;
+  if (typeof repository !== 'string') return;
+
+  const project = projectsDb.getByGithubRepo(repository.toLowerCase());
+  if (!project?.github_automation_enabled || !project.github_repo) return;
+
+  const action = typeof payload.action === 'string' ? payload.action : '';
+  const issueNumber = numberAt(payload.issue, 'number');
+  const prNumber = numberAt(payload.pull_request, 'number');
+
+  if (event === 'issues') {
+    if (!ISSUE_ACTIONS.has(action) || !issueNumber) return;
+    await Promise.all([
+      reconcileRefinementIssue(project.id, issueNumber),
+      reconcileApprovedIssue(project.id, issueNumber),
+    ]);
+    return;
+  }
+
+  if (event === 'issue_comment') {
+    if (!COMMENT_ACTIONS.has(action) || !issueNumber) return;
+    const comment = payload.comment as
+      | { id?: unknown; body?: unknown; user?: { login?: unknown } }
+      | undefined;
+    const body = typeof comment?.body === 'string' ? comment.body : '';
+    const author = typeof comment?.user?.login === 'string' ? comment.user.login : undefined;
+    if (isBottegaComment(body, author, await githubIdentity.resolveLogin())) return;
+
+    if ((payload.issue as { pull_request?: unknown } | undefined)?.pull_request) {
+      // The reconciler fetches current comments and incorporates the explicit
+      // comment ID into its evidence hash, making this delivery a forced run.
+      if (hasGitHubPrTriggerMention(body)) await reconcilePullRequest(project.id, issueNumber);
+    } else {
+      await Promise.all([
+        reconcileRefinementIssue(project.id, issueNumber),
+        reconcileApprovedIssue(project.id, issueNumber),
+      ]);
+    }
+    return;
+  }
+
+  if (event === 'pull_request') {
+    if (PR_ACTIONS.has(action) && prNumber) await reconcilePullRequest(project.id, prNumber);
+    return;
+  }
+
+  if (event === 'pull_request_review' || event === 'pull_request_review_comment') {
+    if (!REVIEW_ACTIONS.has(action) && !COMMENT_ACTIONS.has(action)) return;
+    const source = event === 'pull_request_review' ? payload.review : payload.comment;
+    const comment = source as { body?: unknown; user?: { login?: unknown } } | undefined;
+    const body = typeof comment?.body === 'string' ? comment.body : '';
+    const author = typeof comment?.user?.login === 'string' ? comment.user.login : undefined;
+    if (isBottegaComment(body, author, await githubIdentity.resolveLogin())) return;
+    if (prNumber) await reconcilePullRequest(project.id, prNumber);
+    return;
+  }
+
+  const check = event === 'check_run' ? payload.check_run : payload.check_suite;
+  if (!CHECK_ACTIONS.has(action)) return;
+  const conclusion = (check as { conclusion?: unknown } | undefined)?.conclusion;
+  if (
+    action === 'completed' &&
+    typeof conclusion === 'string' &&
+    ['success', 'neutral', 'skipped'].includes(conclusion.toLowerCase())
+  ) return;
+  for (const number of pullRequestNumbers(
+    (check as { pull_requests?: unknown } | undefined)?.pull_requests,
+  )) {
+    await reconcilePullRequest(project.id, number);
   }
 }
 
-/**
- * Check if the configured @-trigger (e.g. "@bottega") is mentioned in
- * the comment (case-insensitive).
- */
-export function hasTriggerMention(commentBody: string | null | undefined, trigger?: string): boolean {
-  if (!commentBody) return false;
-  const t = (trigger ?? getConfiguredTrigger()).toLowerCase();
-  if (!t) return false;
-  return commentBody.toLowerCase().includes('@' + t);
+export function queueGitHubWebhook(
+  event: string,
+  payload: Record<string, unknown>,
+): boolean {
+  if (!acceptingWebhooks) return false;
+
+  const repository = (payload.repository as { full_name?: unknown } | undefined)?.full_name;
+  const work = new Promise<void>((resolve) => setImmediate(resolve))
+    .then(() => dispatchGitHubWebhook(event, payload))
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[Webhook] ${event} reconciliation failed for ${String(repository)}:`, message);
+    })
+    .finally(() => pendingWebhooks.delete(work));
+  pendingWebhooks.add(work);
+  return true;
 }
 
-/**
- * Wrap the dispatch-owned per-conversation broadcast helper as the
- * `BroadcastFn(conversationId, message)` shape that the conversation
- * lifecycle expects. Webhook-triggered streams fan out to whoever is
- * subscribed to the conversation, exactly like manual streams.
- */
-function createBroadcastFn(
-  broadcastToConversationSubscribers:
-    | BroadcastToConversationSubscribersFn
-    | null
-    | undefined,
-): BroadcastFn | null {
-  if (!broadcastToConversationSubscribers) return null;
-  return (convId, msg) => broadcastToConversationSubscribers(convId, msg);
+export function stopAcceptingGitHubWebhooks(): void {
+  acceptingWebhooks = false;
 }
 
-export interface FileContext {
-  path: string;
-  line?: number | null | undefined;
-  startLine?: number | null | undefined;
-  diffHunk?: string | null | undefined;
-  side?: string | null | undefined;
+export async function drainGitHubWebhooks(): Promise<void> {
+  await Promise.allSettled([...pendingWebhooks]);
 }
 
-export interface TriggerFromCommentArgs {
-  taskId: number;
-  commentBody: string;
-  commentAuthor: string;
-  prUrl?: string | undefined;
-  fileContext: FileContext | null;
-  broadcastToConversationSubscribers?: BroadcastToConversationSubscribersFn | undefined;
-  broadcastToTaskSubscribers?: BroadcastToTaskSubscribersFn | undefined;
-}
-
-export interface TriggerResult {
-  conversationId: number;
-  agentRunId: number;
-}
-
-/**
- * Trigger PR agent from a GitHub PR comment
- */
-export async function triggerPrAgentFromComment({
-  taskId,
-  commentBody,
-  commentAuthor,
-  prUrl,
-  fileContext,
-  broadcastToConversationSubscribers,
-  broadcastToTaskSubscribers,
-}: TriggerFromCommentArgs): Promise<TriggerResult> {
-  // 1. Verify task exists
-  const task = tasksDb.getById(taskId);
-  if (!task) {
-    throw new Error(`Task ${taskId} not found`);
-  }
-
-  // 2. Check task status - don't run for completed tasks
-  if (task.status === 'completed') {
-    throw new Error(`Task ${taskId} is already completed`);
-  }
-
-  // 3. Get task with project info for worktree check
-  const taskWithProject = tasksDb.getWithProject(taskId);
-  if (!taskWithProject) {
-    throw new Error(`Task ${taskId} project not found`);
-  }
-
-  // 4. Verify worktree exists
-  const hasWorktree = await worktreeExists(taskWithProject.repo_folder_path, taskId);
-  if (!hasWorktree) {
-    throw new Error(`No worktree found for task ${taskId}`);
-  }
-
-  // 5. Check for already running PR agent (concurrency guard)
-  const agentRuns = agentRunsDb.getByTask(taskId);
-  const runningPrAgent = agentRuns.find((r) => r.agent_type === 'pr' && r.status === 'running');
-  if (runningPrAgent) {
-    throw new Error(`PR agent already running for task ${taskId}`);
-  }
-
-  // 6. Resolve the user to run the agent as (the task owner)
-  if (!taskWithProject.user_id) {
-    throw new Error(`Task ${taskId} has no owning user`);
-  }
-  const taskOwner = userDb.getUserById(taskWithProject.user_id);
-  if (!taskOwner) {
-    throw new Error(`Task ${taskId} owner (user ${taskWithProject.user_id}) not found or inactive`);
-  }
-
-  // 7. Create per-conversation broadcast function
-  const broadcastFn = createBroadcastFn(broadcastToConversationSubscribers);
-
-  // 8. Import and start PR agent with comment context
-  // Dynamic import to avoid circular dependencies
-  const { startAgentRun } = await import('./agentRunner.js');
-
-  const { agentRun, conversation } = await startAgentRun(taskId, 'pr', {
-    broadcastFn: broadcastFn ?? undefined,
-    broadcastToTaskSubscribersFn: broadcastToTaskSubscribers,
-    userId: taskOwner.id,
-    // Custom context for comment-triggered PR agent
-    webhookContext: {
-      commentBody,
-      commentAuthor,
-      prUrl,
-      fileContext,
-      triggeredBy: 'github_webhook',
-    },
-  });
-
-  console.log(`[Webhook] Triggered PR agent for task ${taskId}, conversation ${conversation.id}`);
-
-  return {
-    conversationId: conversation.id,
-    agentRunId: agentRun.id,
-  };
-}
-
-export interface ReviewComment {
-  commentBody: string | undefined;
-  commentAuthor: string;
-  fileContext: FileContext | null;
-}
-
-export interface TriggerFromReviewArgs {
-  taskId: number;
-  reviewBody: string | null;
-  reviewAuthor: string;
-  comments: ReviewComment[];
-  prUrl?: string | undefined;
-  broadcastToConversationSubscribers?: BroadcastToConversationSubscribersFn | undefined;
-  broadcastToTaskSubscribers?: BroadcastToTaskSubscribersFn | undefined;
-}
-
-/**
- * Trigger PR agent from a GitHub pull request review
- */
-export async function triggerPrAgentFromReview({
-  taskId,
-  reviewBody,
-  reviewAuthor,
-  comments,
-  prUrl,
-  broadcastToConversationSubscribers,
-  broadcastToTaskSubscribers,
-}: TriggerFromReviewArgs): Promise<TriggerResult> {
-  // 1. Verify task exists
-  const task = tasksDb.getById(taskId);
-  if (!task) {
-    throw new Error(`Task ${taskId} not found`);
-  }
-
-  // 2. Check task status - don't run for completed tasks
-  if (task.status === 'completed') {
-    throw new Error(`Task ${taskId} is already completed`);
-  }
-
-  // 3. Get task with project info for worktree check
-  const taskWithProject = tasksDb.getWithProject(taskId);
-  if (!taskWithProject) {
-    throw new Error(`Task ${taskId} project not found`);
-  }
-
-  // 4. Verify worktree exists
-  const hasWorktree = await worktreeExists(taskWithProject.repo_folder_path, taskId);
-  if (!hasWorktree) {
-    throw new Error(`No worktree found for task ${taskId}`);
-  }
-
-  // 5. Check for already running PR agent (concurrency guard)
-  const agentRuns = agentRunsDb.getByTask(taskId);
-  const runningPrAgent = agentRuns.find((r) => r.agent_type === 'pr' && r.status === 'running');
-  if (runningPrAgent) {
-    throw new Error(`PR agent already running for task ${taskId}`);
-  }
-
-  // 6. Resolve the user to run the agent as (the task owner)
-  if (!taskWithProject.user_id) {
-    throw new Error(`Task ${taskId} has no owning user`);
-  }
-  const taskOwner = userDb.getUserById(taskWithProject.user_id);
-  if (!taskOwner) {
-    throw new Error(`Task ${taskId} owner (user ${taskWithProject.user_id}) not found or inactive`);
-  }
-
-  // 7. Create per-conversation broadcast function
-  const broadcastFn = createBroadcastFn(broadcastToConversationSubscribers);
-
-  // 8. Import and start PR agent with review context
-  const { startAgentRun } = await import('./agentRunner.js');
-
-  const { agentRun, conversation } = await startAgentRun(taskId, 'pr', {
-    broadcastFn: broadcastFn ?? undefined,
-    broadcastToTaskSubscribersFn: broadcastToTaskSubscribers,
-    userId: taskOwner.id,
-    webhookContext: {
-      reviewBody,
-      reviewAuthor,
-      comments,
-      prUrl,
-      triggeredBy: 'github_webhook',
-    },
-  });
-
-  console.log(
-    `[Webhook] Triggered PR agent from review for task ${taskId}, conversation ${conversation.id}`,
-  );
-
-  return {
-    conversationId: conversation.id,
-    agentRunId: agentRun.id,
-  };
+export function resetWebhookServiceForTests(): void {
+  githubIdentity.reset();
+  acceptingWebhooks = true;
+  pendingWebhooks.clear();
 }

@@ -352,11 +352,10 @@ export const api = {
   projects: {
     list: (): TypedFetch<ListProjectsResponse> =>
       authenticatedFetch<ListProjectsResponse>('/api/projects'),
-    create: (name: string, repoFolderPath: string): TypedFetch<CreateProjectResponse> => {
-      const body: CreateProjectRequest = { name, repoFolderPath };
+    create: (data: CreateProjectRequest): TypedFetch<CreateProjectResponse> => {
       return authenticatedFetch<CreateProjectResponse>('/api/projects', {
         method: 'POST',
-        body: JSON.stringify(body),
+        body: JSON.stringify(data),
       });
     },
     get: (id: number): TypedFetch<GetProjectResponse> =>

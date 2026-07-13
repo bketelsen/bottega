@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock all dependencies before importing the module under test
 vi.mock('../database/db.js', () => ({
@@ -7,6 +7,9 @@ vi.mock('../database/db.js', () => ({
     getWithProject: vi.fn(),
     update: vi.fn(),
     incrementRunCount: vi.fn()
+  },
+  projectsDb: {
+    getById: vi.fn()
   },
   agentRunsDb: {
     create: vi.fn(),
@@ -91,12 +94,14 @@ vi.mock('./agentModelSettings.js', () => ({
 }));
 
 import {
+  AgentAlreadyRunningError,
+  configureAgentRunnerBroadcastDefaults,
   startAgentRun,
   getRunningAgentForTask,
   forceCompleteRunningAgents
 } from './agentRunner.js';
 
-import { tasksDb, agentRunsDb, conversationsDb, userDb } from '../database/db.js';
+import { tasksDb, agentRunsDb, conversationsDb, projectsDb, userDb } from '../database/db.js';
 import { startConversation } from './conversationAdapter.js';
 import { updateUserBadge } from './notifications.js';
 import { buildContextPrompt } from './documentation.js';
@@ -138,6 +143,8 @@ describe('agentRunner', () => {
     vi.clearAllMocks();
   });
 
+  afterEach(() => configureAgentRunnerBroadcastDefaults({}));
+
   describe('startAgentRun', () => {
     beforeEach(() => {
       vi.mocked(tasksDb.getWithProject).mockReturnValue(mockTaskWithProject as never);
@@ -147,6 +154,7 @@ describe('agentRunner', () => {
       vi.mocked(startConversation).mockResolvedValue({ conversationId: 1, claudeSessionId: 'session-123' });
       vi.mocked(worktreeExists).mockResolvedValue(false);
       vi.mocked(userDb.getUserById).mockReturnValue({ id: 1, username: 'test', is_technical: 1 } as never);
+      vi.mocked(projectsDb.getById).mockReturnValue({ id: 1, github_repo: null } as never);
     });
 
     it('should throw error if task not found', async () => {
@@ -171,6 +179,67 @@ describe('agentRunner', () => {
       expect(agentRunsDb.create).not.toHaveBeenCalled();
       expect(conversationsDb.create).not.toHaveBeenCalled();
       expect(startConversation).not.toHaveBeenCalled();
+    });
+
+    it('should translate a running-agent unique constraint race without incrementing', async () => {
+      const constraintError = Object.assign(
+        new Error('UNIQUE constraint failed: task_agent_runs.task_id'),
+        { code: 'SQLITE_CONSTRAINT_UNIQUE' },
+      );
+      vi.mocked(agentRunsDb.create).mockImplementationOnce(() => {
+        throw constraintError;
+      });
+      vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+        { id: 9, task_id: 1, status: 'running' } as never,
+      ]);
+
+      await expect(startAgentRun(1, 'implementation')).rejects.toBeInstanceOf(
+        AgentAlreadyRunningError,
+      );
+
+      expect(tasksDb.incrementRunCount).not.toHaveBeenCalled();
+      expect(conversationsDb.create).not.toHaveBeenCalled();
+    });
+
+    it('should mark a reserved run failed when conversation startup fails', async () => {
+      const broadcastToTaskSubscribersFn = vi.fn();
+      configureAgentRunnerBroadcastDefaults({ broadcastToTaskSubscribersFn });
+      vi.mocked(startConversation).mockRejectedValueOnce(new Error('startup failed'));
+
+      await expect(startAgentRun(1, 'implementation')).rejects.toThrow('startup failed');
+
+      expect(tasksDb.incrementRunCount).toHaveBeenCalledWith(1);
+      expect(agentRunsDb.updateStatus).toHaveBeenLastCalledWith(1, 'failed');
+      expect(broadcastToTaskSubscribersFn).toHaveBeenLastCalledWith(1, {
+        type: 'agent-run-updated',
+        agentRun: {
+          id: 1,
+          status: 'failed',
+          agent_type: 'implementation',
+          conversation_id: 1,
+        },
+      });
+    });
+
+    it('should broadcast a failed reserved run with no conversation when startup fails early', async () => {
+      const broadcastToTaskSubscribersFn = vi.fn();
+      configureAgentRunnerBroadcastDefaults({ broadcastToTaskSubscribersFn });
+      vi.mocked(tasksDb.incrementRunCount).mockImplementationOnce(() => {
+        throw new Error('startup failed');
+      });
+
+      await expect(startAgentRun(1, 'implementation')).rejects.toThrow('startup failed');
+
+      expect(agentRunsDb.updateStatus).toHaveBeenLastCalledWith(1, 'failed');
+      expect(broadcastToTaskSubscribersFn).toHaveBeenCalledWith(1, {
+        type: 'agent-run-updated',
+        agentRun: {
+          id: 1,
+          status: 'failed',
+          agent_type: 'implementation',
+          conversation_id: null,
+        },
+      });
     });
 
     it('should create agent run and conversation for planification agent', async () => {
@@ -307,6 +376,42 @@ describe('agentRunner', () => {
           conversationId: 1
         })
       );
+    });
+
+    it('should inherit process-wide broadcast defaults', async () => {
+      const broadcastFn = vi.fn();
+      const broadcastToTaskSubscribersFn = vi.fn();
+      configureAgentRunnerBroadcastDefaults({ broadcastFn, broadcastToTaskSubscribersFn });
+
+      await startAgentRun(1, 'implementation');
+
+      expect(broadcastToTaskSubscribersFn).toHaveBeenCalledWith(1, expect.objectContaining({
+        type: 'agent-run-updated',
+      }));
+      expect(startConversation).toHaveBeenCalledWith(1, 'implementation message', expect.objectContaining({
+        broadcastFn,
+        broadcastToTaskSubscribersFn,
+      }));
+    });
+
+    it('should prefer per-call broadcasters over process-wide defaults', async () => {
+      const defaultBroadcastFn = vi.fn();
+      const defaultTaskBroadcast = vi.fn();
+      const broadcastFn = vi.fn();
+      const broadcastToTaskSubscribersFn = vi.fn();
+      configureAgentRunnerBroadcastDefaults({
+        broadcastFn: defaultBroadcastFn,
+        broadcastToTaskSubscribersFn: defaultTaskBroadcast,
+      });
+
+      await startAgentRun(1, 'implementation', { broadcastFn, broadcastToTaskSubscribersFn });
+
+      expect(defaultTaskBroadcast).not.toHaveBeenCalled();
+      expect(startConversation).toHaveBeenCalledWith(1, 'implementation message', expect.objectContaining({
+        broadcastFn,
+        broadcastToTaskSubscribersFn,
+      }));
+      expect(defaultBroadcastFn).not.toHaveBeenCalled();
     });
 
     it('should pass per-agent model and effort from agent_model_settings', async () => {
@@ -458,6 +563,47 @@ describe('agentRunner', () => {
         'pr message',
         expect.any(Object)
       );
+    });
+
+    it('blocks a GitHub-linked PR agent below PR tier before rebase or launch', async () => {
+      vi.mocked(projectsDb.getById).mockReturnValue({
+        id: 1,
+        github_repo: 'owner/repo',
+        github_automation_enabled: 1,
+        autonomy_tier: 'issues',
+      } as never);
+
+      await expect(startAgentRun(1, 'pr')).rejects.toMatchObject({
+        code: 'GITHUB_CAPABILITY_DENIED',
+        action: 'push',
+      });
+
+      expect(rebaseOnMain).not.toHaveBeenCalled();
+      expect(agentRunsDb.create).not.toHaveBeenCalled();
+      expect(startConversation).not.toHaveBeenCalled();
+    });
+
+    it('rechecks GitHub PR capability immediately before agent launch', async () => {
+      vi.mocked(projectsDb.getById)
+        .mockReturnValueOnce({
+          id: 1,
+          github_repo: 'owner/repo',
+          github_automation_enabled: 1,
+          autonomy_tier: 'pr',
+        } as never)
+        .mockReturnValueOnce({
+          id: 1,
+          github_repo: 'owner/repo',
+          github_automation_enabled: 0,
+          autonomy_tier: 'pr',
+        } as never);
+
+      await expect(startAgentRun(1, 'pr')).rejects.toMatchObject({
+        code: 'GITHUB_CAPABILITY_DENIED',
+      });
+
+      expect(rebaseOnMain).toHaveBeenCalled();
+      expect(startConversation).not.toHaveBeenCalled();
     });
 
     it('still starts the PR agent when the pre-rebase hits conflicts', async () => {

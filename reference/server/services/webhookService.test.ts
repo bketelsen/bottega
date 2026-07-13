@@ -1,551 +1,218 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
 import crypto from 'crypto';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Use vi.hoisted to create mock functions
-const {
-  mockGetById,
-  mockGetWithProject,
-  mockGetByTask,
-  mockGetUserById,
-  mockWorktreeExists,
-  mockStartAgentRun,
-  mockGetAppSetting
-} = vi.hoisted(() => ({
-  mockGetById: vi.fn(),
-  mockGetWithProject: vi.fn(),
-  mockGetByTask: vi.fn(),
-  mockGetUserById: vi.fn(),
-  mockWorktreeExists: vi.fn(),
-  mockStartAgentRun: vi.fn(),
-  mockGetAppSetting: vi.fn()
+const mocks = vi.hoisted(() => ({
+  getProject: vi.fn(),
+  getSetting: vi.fn(),
+  getSelf: vi.fn(),
+  refinement: vi.fn(),
+  approved: vi.fn(),
+  pullRequest: vi.fn(),
 }));
 
-// Mock database
 vi.mock('../database/db.js', () => ({
-  tasksDb: {
-    getById: mockGetById,
-    getWithProject: mockGetWithProject
-  },
-  userDb: {
-    getUserById: mockGetUserById
-  },
-  agentRunsDb: {
-    getByTask: mockGetByTask
-  },
-  appSettingsDb: {
-    getValue: mockGetAppSetting
-  }
+  projectsDb: { getByGithubRepo: mocks.getProject },
+  appSettingsDb: { getValue: mocks.getSetting },
 }));
-
-// Mock worktree service
-vi.mock('./worktree.js', () => ({
-  worktreeExists: mockWorktreeExists
+vi.mock('./github/client.js', () => ({
+  githubClient: { getSelf: mocks.getSelf },
 }));
-
-// Mock agentRunner (dynamic import)
-vi.mock('./agentRunner.js', () => ({
-  startAgentRun: mockStartAgentRun
+vi.mock('./github/reconcile.js', () => ({
+  reconcileRefinementIssue: mocks.refinement,
+  reconcileApprovedIssue: mocks.approved,
+  reconcilePullRequest: mocks.pullRequest,
 }));
 
 import {
+  drainGitHubWebhooks,
+  dispatchGitHubWebhook,
+  isBottegaComment,
+  queueGitHubWebhook,
+  resetWebhookServiceForTests,
+  stopAcceptingGitHubWebhooks,
   validateGitHubWebhookSignature,
-  parseTaskIdFromBranch,
-  hasTriggerMention,
-  getConfiguredTrigger,
-  triggerPrAgentFromComment,
-  triggerPrAgentFromReview
 } from './webhookService.js';
 
-describe('Webhook Service', () => {
+describe('webhook service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default trigger lookup so trigger-aware code paths see a stable value.
-    vi.mocked(mockGetAppSetting).mockReturnValue('bottega');
+    resetWebhookServiceForTests();
+    mocks.getProject.mockReturnValue({
+      id: 7,
+      github_repo: 'org/repo',
+      github_automation_enabled: 1,
+    });
+    mocks.getSelf.mockResolvedValue({ login: 'bottega-host', id: 1, type: 'User' });
+    mocks.getSetting.mockReturnValue('bottega');
+    mocks.refinement.mockResolvedValue(undefined);
+    mocks.approved.mockResolvedValue(undefined);
+    mocks.pullRequest.mockResolvedValue(undefined);
   });
 
-  describe('validateGitHubWebhookSignature', () => {
-    const secret = 'test-secret-123';
-
-    it('should return true for valid signature', () => {
-      const payload = '{"test": "data"}';
-      const expectedSignature = 'sha256=' + crypto
-        .createHmac('sha256', secret)
-        .update(payload, 'utf8')
-        .digest('hex');
-
-      const result = validateGitHubWebhookSignature(payload, expectedSignature, secret);
-      expect(result).toBe(true);
-    });
-
-    it('should return false for invalid signature', () => {
-      const payload = '{"test": "data"}';
-      const invalidSignature = 'sha256=invalid-signature-here';
-
-      const result = validateGitHubWebhookSignature(payload, invalidSignature, secret);
-      expect(result).toBe(false);
-    });
-
-    it('should return false for missing signature', () => {
-      const payload = '{"test": "data"}';
-
-      const result = validateGitHubWebhookSignature(payload, null as never, secret);
-      expect(result).toBe(false);
-    });
-
-    it('should return false for missing secret', () => {
-      const payload = '{"test": "data"}';
-      const signature = 'sha256=some-signature';
-
-      const result = validateGitHubWebhookSignature(payload, signature, null as never);
-      expect(result).toBe(false);
-    });
-
-    it('should handle Buffer payload', () => {
-      const payload = Buffer.from('{"test": "data"}');
-      const expectedSignature = 'sha256=' + crypto
-        .createHmac('sha256', secret)
-        .update(payload.toString(), 'utf8')
-        .digest('hex');
-
-      const result = validateGitHubWebhookSignature(payload, expectedSignature, secret);
-      expect(result).toBe(true);
-    });
+  it('validates HMAC-SHA256 without normalizing payload bytes', () => {
+    const payload = Buffer.from('{ "value": 1 }\n');
+    const signature = `sha256=${crypto
+      .createHmac('sha256', 'secret')
+      .update(payload)
+      .digest('hex')}`;
+    expect(validateGitHubWebhookSignature(payload, signature, 'secret')).toBe(true);
+    expect(validateGitHubWebhookSignature(payload, signature, 'other')).toBe(false);
   });
 
-  describe('parseTaskIdFromBranch', () => {
-    it('should extract task ID from valid branch name', () => {
-      expect(parseTaskIdFromBranch('task/123-add-feature')).toBe(123);
-      expect(parseTaskIdFromBranch('task/1-x')).toBe(1);
-      expect(parseTaskIdFromBranch('task/999-some-long-slug-name')).toBe(999);
-    });
-
-    it('should return null for non-matching branch names', () => {
-      expect(parseTaskIdFromBranch('main')).toBe(null);
-      expect(parseTaskIdFromBranch('feature/add-login')).toBe(null);
-      expect(parseTaskIdFromBranch('task-123-missing-slash')).toBe(null);
-      expect(parseTaskIdFromBranch('task/')).toBe(null);
-      expect(parseTaskIdFromBranch('task/abc-not-a-number')).toBe(null);
-    });
-
-    it('should return null for null or undefined input', () => {
-      expect(parseTaskIdFromBranch(null)).toBe(null);
-      expect(parseTaskIdFromBranch(undefined)).toBe(null);
-      expect(parseTaskIdFromBranch('')).toBe(null);
-    });
+  it('recognizes stable self markers', () => {
+    expect(isBottegaComment('plan\n<!-- bottega:task:4:plan -->', 'human', null)).toBe(true);
+    expect(isBottegaComment('text', 'BOTTEGA-HOST', 'bottega-host')).toBe(true);
   });
 
-  describe('getConfiguredTrigger', () => {
-    it('returns the configured trigger from app_settings', () => {
-      vi.mocked(mockGetAppSetting).mockReturnValue('mybot');
-      expect(getConfiguredTrigger()).toBe('mybot');
-      expect(mockGetAppSetting).toHaveBeenCalledWith('github_pr_trigger');
+  it('routes issue events through both idempotent issue reconcilers', async () => {
+    await dispatchGitHubWebhook('issues', {
+      action: 'labeled',
+      issue: { number: 12 },
+      repository: { full_name: 'Org/Repo' },
     });
-
-    it('falls back to "bottega" if the lookup returns falsy', () => {
-      vi.mocked(mockGetAppSetting).mockReturnValue('');
-      expect(getConfiguredTrigger()).toBe('bottega');
-    });
-
-    it('falls back to "bottega" if the database throws', () => {
-      vi.mocked(mockGetAppSetting).mockImplementation(() => { throw new Error('db down'); });
-      expect(getConfiguredTrigger()).toBe('bottega');
-    });
+    expect(mocks.getProject).toHaveBeenCalledWith('org/repo');
+    expect(mocks.refinement).toHaveBeenCalledWith(7, 12);
+    expect(mocks.approved).toHaveBeenCalledWith(7, 12);
   });
 
-  describe('hasTriggerMention', () => {
-    it('detects the default @bottega trigger from app_settings', () => {
-      vi.mocked(mockGetAppSetting).mockReturnValue('bottega');
-      expect(hasTriggerMention('@bottega please fix this')).toBe(true);
-      expect(hasTriggerMention('Hey @bottega, can you help?')).toBe(true);
+  it('passes an explicit @bottega comment to PR reconciliation', async () => {
+    await dispatchGitHubWebhook('issue_comment', {
+      action: 'created',
+      issue: { number: 31, pull_request: {} },
+      comment: { id: 99, body: '@bottega retry CI', user: { login: 'human' } },
+      repository: { full_name: 'org/repo' },
     });
-
-    it('is case-insensitive', () => {
-      expect(hasTriggerMention('@Bottega please fix', 'bottega')).toBe(true);
-      expect(hasTriggerMention('@BOTTEGA please fix', 'bottega')).toBe(true);
-      expect(hasTriggerMention('@BoTtEgA please fix', 'bottega')).toBe(true);
-    });
-
-    it('respects a custom trigger argument over the configured default', () => {
-      vi.mocked(mockGetAppSetting).mockReturnValue('bottega');
-      expect(hasTriggerMention('@acme please fix', 'acme')).toBe(true);
-      expect(hasTriggerMention('@bottega please fix', 'acme')).toBe(false);
-    });
-
-    it('returns false when the trigger is absent', () => {
-      expect(hasTriggerMention('Please fix this bug', 'bottega')).toBe(false);
-      expect(hasTriggerMention('bottega without at sign', 'bottega')).toBe(false);
-      expect(hasTriggerMention('', 'bottega')).toBe(false);
-    });
-
-    it('returns false for null or undefined comment bodies', () => {
-      expect(hasTriggerMention(null, 'bottega')).toBe(false);
-      expect(hasTriggerMention(undefined, 'bottega')).toBe(false);
-    });
+    expect(mocks.pullRequest).toHaveBeenCalledWith(7, 31);
   });
 
-  describe('triggerPrAgentFromComment', () => {
-    const mockTask = {
-      id: 123,
-      status: 'in_progress',
-      title: 'Test Task'
+  it('uses the configured trigger and ignores ordinary PR comments', async () => {
+    mocks.getSetting.mockReturnValue('repair-bot');
+    const payload = {
+      action: 'created',
+      issue: { number: 31, pull_request: {} },
+      comment: { id: 99, body: 'retry this', user: { login: 'human' } },
+      repository: { full_name: 'org/repo' },
     };
 
-    const mockTaskWithProject = {
-      ...mockTask,
-      user_id: 1,
-      repo_folder_path: '/path/to/repo',
-      project_id: 1
-    };
+    await dispatchGitHubWebhook('issue_comment', payload);
+    expect(mocks.pullRequest).not.toHaveBeenCalled();
 
-    const mockUser = {
+    await dispatchGitHubWebhook('issue_comment', {
+      ...payload,
+      comment: { ...payload.comment, body: '@repair-bot, retry this' },
+    });
+    expect(mocks.pullRequest).toHaveBeenCalledWith(7, 31);
+  });
+
+  it.each([
+    ['broad marker', 'generated <!-- bottega:generated:evidence -->', 'human'],
+    ['resolved host login', 'ordinary comment', 'bottega-host'],
+  ])('suppresses self comments identified by %s', async (_name, body, login) => {
+    await dispatchGitHubWebhook('pull_request_review_comment', {
+      action: 'created',
+      pull_request: { number: 31 },
+      comment: { body, user: { login } },
+      repository: { full_name: 'org/repo' },
+    });
+    expect(mocks.pullRequest).not.toHaveBeenCalled();
+  });
+
+  it('retries owner resolution after a transient failure', async () => {
+    mocks.getSelf.mockRejectedValueOnce(new Error('temporary')).mockResolvedValueOnce({
+      login: 'bottega-host',
       id: 1,
-      username: 'testuser'
+      type: 'User',
+    });
+    const payload = {
+      action: 'created',
+      pull_request: { number: 31 },
+      comment: { body: 'ordinary comment', user: { login: 'bottega-host' } },
+      repository: { full_name: 'org/repo' },
     };
 
-    const mockAgentRun = { id: 1, status: 'running' };
-    const mockConversation = { id: 100 };
-
-    beforeEach(() => {
-      vi.mocked(mockGetById).mockReturnValue(mockTask);
-      vi.mocked(mockGetWithProject).mockReturnValue(mockTaskWithProject);
-      vi.mocked(mockGetUserById).mockReturnValue(mockUser);
-      vi.mocked(mockWorktreeExists).mockResolvedValue(true);
-      vi.mocked(mockGetByTask).mockReturnValue([]);
-      vi.mocked(mockStartAgentRun).mockResolvedValue({
-        agentRun: mockAgentRun,
-        conversation: mockConversation,
-        claudeSessionId: 'session-123'
-      });
-    });
-
-    it('should trigger PR agent successfully', async () => {
-      const result = await triggerPrAgentFromComment({
-        taskId: 123,
-        commentBody: '@bottega please fix this',
-        commentAuthor: 'octocat',
-        prUrl: 'https://github.com/org/repo/pull/1',
-        fileContext: null,
-        broadcastToConversationSubscribers: null as never,
-        broadcastToTaskSubscribers: null as never
-      });
-
-      expect(result.conversationId).toBe(100);
-      expect(result.agentRunId).toBe(1);
-      expect(mockStartAgentRun).toHaveBeenCalledWith(123, 'pr', expect.objectContaining({
-        webhookContext: {
-          commentBody: '@bottega please fix this',
-          commentAuthor: 'octocat',
-          prUrl: 'https://github.com/org/repo/pull/1',
-          fileContext: null,
-          triggeredBy: 'github_webhook'
-        }
-      }));
-    });
-
-    it('should include file context for inline review comments', async () => {
-      const fileContext = {
-        path: 'src/services/auth.js',
-        line: 42,
-        startLine: 40,
-        diffHunk: '@@ -38,6 +38,12 @@ class AuthService\n+  validateToken() {',
-        side: 'RIGHT'
-      };
-
-      const result = await triggerPrAgentFromComment({
-        taskId: 123,
-        commentBody: '@bottega refactor this',
-        commentAuthor: 'reviewer',
-        prUrl: 'https://github.com/org/repo/pull/1',
-        fileContext,
-        broadcastToConversationSubscribers: null as never,
-        broadcastToTaskSubscribers: null as never
-      });
-
-      expect(result.conversationId).toBe(100);
-      expect(mockStartAgentRun).toHaveBeenCalledWith(123, 'pr', expect.objectContaining({
-        webhookContext: {
-          commentBody: '@bottega refactor this',
-          commentAuthor: 'reviewer',
-          prUrl: 'https://github.com/org/repo/pull/1',
-          fileContext,
-          triggeredBy: 'github_webhook'
-        }
-      }));
-    });
-
-    it('should throw error if task not found', async () => {
-      vi.mocked(mockGetById).mockReturnValue(null);
-
-      await expect(triggerPrAgentFromComment({
-        taskId: 999,
-        commentBody: '@bottega fix',
-        commentAuthor: 'user',
-        prUrl: 'https://github.com/org/repo/pull/1',
-        broadcastToConversationSubscribers: null as never,
-        broadcastToTaskSubscribers: null as never
-      } as never)).rejects.toThrow('Task 999 not found');
-    });
-
-    it('should throw error if task is already completed', async () => {
-      vi.mocked(mockGetById).mockReturnValue({ ...mockTask, status: 'completed' });
-
-      await expect(triggerPrAgentFromComment({
-        taskId: 123,
-        commentBody: '@bottega fix',
-        commentAuthor: 'user',
-        prUrl: 'https://github.com/org/repo/pull/1',
-        broadcastToConversationSubscribers: null as never,
-        broadcastToTaskSubscribers: null as never
-      } as never)).rejects.toThrow('Task 123 is already completed');
-    });
-
-    it('should throw error if no worktree exists', async () => {
-      vi.mocked(mockWorktreeExists).mockResolvedValue(false);
-
-      await expect(triggerPrAgentFromComment({
-        taskId: 123,
-        commentBody: '@bottega fix',
-        commentAuthor: 'user',
-        prUrl: 'https://github.com/org/repo/pull/1',
-        broadcastToConversationSubscribers: null as never,
-        broadcastToTaskSubscribers: null as never
-      } as never)).rejects.toThrow('No worktree found for task 123');
-    });
-
-    it('should throw error if PR agent is already running', async () => {
-      vi.mocked(mockGetByTask).mockReturnValue([
-        { id: 1, agent_type: 'pr', status: 'running' }
-      ]);
-
-      await expect(triggerPrAgentFromComment({
-        taskId: 123,
-        commentBody: '@bottega fix',
-        commentAuthor: 'user',
-        prUrl: 'https://github.com/org/repo/pull/1',
-        broadcastToConversationSubscribers: null as never,
-        broadcastToTaskSubscribers: null as never
-      } as never)).rejects.toThrow('PR agent already running for task 123');
-    });
-
-    it('should not throw if non-PR agent is running', async () => {
-      vi.mocked(mockGetByTask).mockReturnValue([
-        { id: 1, agent_type: 'implementation', status: 'running' }
-      ]);
-
-      const result = await triggerPrAgentFromComment({
-        taskId: 123,
-        commentBody: '@bottega fix',
-        commentAuthor: 'user',
-        prUrl: 'https://github.com/org/repo/pull/1',
-        broadcastToConversationSubscribers: null as never,
-        broadcastToTaskSubscribers: null as never
-      } as never);
-
-      expect(result.conversationId).toBe(100);
-    });
-
-    it('should throw if the task has no owning user', async () => {
-      vi.mocked(mockGetWithProject).mockReturnValue({ ...mockTaskWithProject, user_id: null });
-
-      await expect(triggerPrAgentFromComment({
-        taskId: 123,
-        commentBody: '@bottega fix',
-        commentAuthor: 'user',
-        prUrl: 'https://github.com/org/repo/pull/1',
-        broadcastToConversationSubscribers: null as never,
-        broadcastToTaskSubscribers: null as never
-      } as never)).rejects.toThrow('Task 123 has no owning user');
-    });
-
-    it('should throw if the task owner cannot be found (deactivated)', async () => {
-      vi.mocked(mockGetUserById).mockReturnValue(null);
-
-      await expect(triggerPrAgentFromComment({
-        taskId: 123,
-        commentBody: '@bottega fix',
-        commentAuthor: 'user',
-        prUrl: 'https://github.com/org/repo/pull/1',
-        broadcastToConversationSubscribers: null as never,
-        broadcastToTaskSubscribers: null as never
-      } as never)).rejects.toThrow(/owner.*not found or inactive/);
-    });
+    await dispatchGitHubWebhook('pull_request_review_comment', payload);
+    expect(mocks.pullRequest).toHaveBeenCalledTimes(1);
+    await dispatchGitHubWebhook('pull_request_review_comment', payload);
+    expect(mocks.pullRequest).toHaveBeenCalledTimes(1);
+    expect(mocks.getSelf).toHaveBeenCalledTimes(2);
   });
 
-  describe('triggerPrAgentFromReview', () => {
-    const mockTask = {
-      id: 123,
-      status: 'in_progress',
-      title: 'Test Task'
+  it('retains bot-authored check events and reconciles every attached PR', async () => {
+    await dispatchGitHubWebhook('check_run', {
+      action: 'completed',
+      sender: { login: 'ci[bot]' },
+      check_run: { pull_requests: [{ number: 2 }, { number: 3 }] },
+      repository: { full_name: 'org/repo' },
+    });
+    expect(mocks.pullRequest).toHaveBeenNthCalledWith(1, 7, 2);
+    expect(mocks.pullRequest).toHaveBeenNthCalledWith(2, 7, 3);
+  });
+
+  it('filters successful completed checks and deduplicates PR numbers in one payload', async () => {
+    await dispatchGitHubWebhook('check_run', {
+      action: 'completed',
+      check_run: { conclusion: 'success', pull_requests: [{ number: 2 }] },
+      repository: { full_name: 'org/repo' },
+    });
+    expect(mocks.pullRequest).not.toHaveBeenCalled();
+
+    await dispatchGitHubWebhook('check_suite', {
+      action: 'completed',
+      check_suite: {
+        conclusion: 'failure',
+        pull_requests: [{ number: 2 }, { number: 2 }, { number: 3 }],
+      },
+      repository: { full_name: 'org/repo' },
+    });
+    expect(mocks.pullRequest).toHaveBeenCalledTimes(2);
+    expect(mocks.pullRequest).toHaveBeenNthCalledWith(1, 7, 2);
+    expect(mocks.pullRequest).toHaveBeenNthCalledWith(2, 7, 3);
+  });
+
+  it('routes PR and review events and skips disabled projects', async () => {
+    await dispatchGitHubWebhook('pull_request', {
+      action: 'synchronize',
+      pull_request: { number: 8 },
+      repository: { full_name: 'org/repo' },
+    });
+    await dispatchGitHubWebhook('pull_request_review', {
+      action: 'submitted',
+      pull_request: { number: 9 },
+      review: { body: 'changes', user: { login: 'reviewer' } },
+      repository: { full_name: 'org/repo' },
+    });
+    expect(mocks.pullRequest).toHaveBeenCalledWith(7, 8);
+    expect(mocks.pullRequest).toHaveBeenCalledWith(7, 9);
+
+    mocks.getProject.mockReturnValue({ id: 7, github_repo: 'org/repo', github_automation_enabled: 0 });
+    await dispatchGitHubWebhook('pull_request', {
+      action: 'reopened',
+      pull_request: { number: 10 },
+      repository: { full_name: 'org/repo' },
+    });
+    expect(mocks.pullRequest).not.toHaveBeenCalledWith(7, 10);
+  });
+
+  it('tracks accepted deferred work for shutdown and stops new dispatch', async () => {
+    let finish: (() => void) | undefined;
+    mocks.pullRequest.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+
+    const payload = {
+      action: 'opened',
+      pull_request: { number: 8 },
+      repository: { full_name: 'org/repo' },
     };
+    expect(queueGitHubWebhook('pull_request', payload)).toBe(true);
+    stopAcceptingGitHubWebhooks();
+    expect(queueGitHubWebhook('pull_request', payload)).toBe(false);
 
-    const mockTaskWithProject = {
-      ...mockTask,
-      user_id: 1,
-      repo_folder_path: '/path/to/repo',
-      project_id: 1
-    };
-
-    const mockUser = {
-      id: 1,
-      username: 'testuser'
-    };
-
-    const mockAgentRun = { id: 2, status: 'running' };
-    const mockConversation = { id: 200 };
-
-    const defaultReviewOptions = {
-      taskId: 123,
-      reviewBody: 'Please address these issues',
-      reviewAuthor: 'reviewer',
-      comments: [
-        {
-          commentBody: 'Fix this function',
-          commentAuthor: 'reviewer',
-          fileContext: {
-            path: 'src/app.js',
-            line: 10,
-            startLine: null,
-            diffHunk: '@@ -8,6 +8,12 @@\n+function foo() {}',
-            side: 'RIGHT'
-          }
-        },
-        {
-          commentBody: 'Add validation here',
-          commentAuthor: 'reviewer',
-          fileContext: {
-            path: 'src/routes.js',
-            line: 25,
-            startLine: 20,
-            diffHunk: '@@ -18,10 +18,15 @@\n code',
-            side: 'LEFT'
-          }
-        }
-      ],
-      prUrl: 'https://github.com/org/repo/pull/1',
-      broadcastToConversationSubscribers: null as never,
-      broadcastToTaskSubscribers: null as never
-    };
-
-    beforeEach(() => {
-      vi.mocked(mockGetById).mockReturnValue(mockTask);
-      vi.mocked(mockGetWithProject).mockReturnValue(mockTaskWithProject);
-      vi.mocked(mockGetUserById).mockReturnValue(mockUser);
-      vi.mocked(mockWorktreeExists).mockResolvedValue(true);
-      vi.mocked(mockGetByTask).mockReturnValue([]);
-      vi.mocked(mockStartAgentRun).mockResolvedValue({
-        agentRun: mockAgentRun,
-        conversation: mockConversation,
-        claudeSessionId: 'session-456'
-      });
-    });
-
-    it('should trigger PR agent with review context successfully', async () => {
-      const result = await triggerPrAgentFromReview(defaultReviewOptions);
-
-      expect(result.conversationId).toBe(200);
-      expect(result.agentRunId).toBe(2);
-      expect(mockStartAgentRun).toHaveBeenCalledWith(123, 'pr', expect.objectContaining({
-        webhookContext: {
-          reviewBody: 'Please address these issues',
-          reviewAuthor: 'reviewer',
-          comments: defaultReviewOptions.comments,
-          prUrl: 'https://github.com/org/repo/pull/1',
-          triggeredBy: 'github_webhook'
-        }
-      }));
-    });
-
-    it('should pass all comments to startAgentRun with correct webhookContext shape', async () => {
-      await triggerPrAgentFromReview(defaultReviewOptions);
-
-      const call = mockStartAgentRun.mock.calls[0];
-      const webhookContext = call![2].webhookContext;
-
-      expect(webhookContext.reviewBody).toBe('Please address these issues');
-      expect(webhookContext.reviewAuthor).toBe('reviewer');
-      expect(webhookContext.comments).toHaveLength(2);
-      expect(webhookContext.comments[0].commentBody).toBe('Fix this function');
-      expect(webhookContext.comments[0].fileContext.path).toBe('src/app.js');
-      expect(webhookContext.comments[1].commentBody).toBe('Add validation here');
-      expect(webhookContext.comments[1].fileContext.path).toBe('src/routes.js');
-      expect(webhookContext.triggeredBy).toBe('github_webhook');
-    });
-
-    it('should handle review with null body', async () => {
-      const result = await triggerPrAgentFromReview({
-        ...defaultReviewOptions,
-        reviewBody: null
-      });
-
-      expect(result.conversationId).toBe(200);
-      const webhookContext = mockStartAgentRun.mock.calls[0]![2].webhookContext;
-      expect(webhookContext.reviewBody).toBeNull();
-    });
-
-    it('should handle review with empty comments array', async () => {
-      const result = await triggerPrAgentFromReview({
-        ...defaultReviewOptions,
-        comments: []
-      });
-
-      expect(result.conversationId).toBe(200);
-      const webhookContext = mockStartAgentRun.mock.calls[0]![2].webhookContext;
-      expect(webhookContext.comments).toEqual([]);
-    });
-
-    it('should throw error if task not found', async () => {
-      vi.mocked(mockGetById).mockReturnValue(null);
-
-      await expect(triggerPrAgentFromReview({
-        ...defaultReviewOptions,
-        taskId: 999
-      })).rejects.toThrow('Task 999 not found');
-    });
-
-    it('should throw error if task is already completed', async () => {
-      vi.mocked(mockGetById).mockReturnValue({ ...mockTask, status: 'completed' });
-
-      await expect(triggerPrAgentFromReview(defaultReviewOptions as never))
-        .rejects.toThrow('Task 123 is already completed');
-    });
-
-    it('should throw error if no worktree exists', async () => {
-      vi.mocked(mockWorktreeExists).mockResolvedValue(false);
-
-      await expect(triggerPrAgentFromReview(defaultReviewOptions as never))
-        .rejects.toThrow('No worktree found for task 123');
-    });
-
-    it('should throw error if PR agent is already running', async () => {
-      vi.mocked(mockGetByTask).mockReturnValue([
-        { id: 1, agent_type: 'pr', status: 'running' }
-      ]);
-
-      await expect(triggerPrAgentFromReview(defaultReviewOptions as never))
-        .rejects.toThrow('PR agent already running for task 123');
-    });
-
-    it('should not throw if non-PR agent is running', async () => {
-      vi.mocked(mockGetByTask).mockReturnValue([
-        { id: 1, agent_type: 'implementation', status: 'running' }
-      ]);
-
-      const result = await triggerPrAgentFromReview(defaultReviewOptions);
-      expect(result.conversationId).toBe(200);
-    });
-
-    it('should throw if the task has no owning user', async () => {
-      vi.mocked(mockGetWithProject).mockReturnValue({ ...mockTaskWithProject, user_id: null });
-
-      await expect(triggerPrAgentFromReview(defaultReviewOptions as never))
-        .rejects.toThrow('Task 123 has no owning user');
-    });
-
-    it('should throw if the task owner cannot be found (deactivated)', async () => {
-      vi.mocked(mockGetUserById).mockReturnValue(null);
-
-      await expect(triggerPrAgentFromReview(defaultReviewOptions as never))
-        .rejects.toThrow(/owner.*not found or inactive/);
-    });
+    await new Promise((resolve) => setImmediate(resolve));
+    let drained = false;
+    const draining = drainGitHubWebhooks().then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    finish?.();
+    await draining;
+    expect(mocks.pullRequest).toHaveBeenCalledTimes(1);
   });
 });

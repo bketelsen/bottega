@@ -243,6 +243,35 @@ describe('Worktree Service', () => {
       ]);
     });
 
+    it('fetches and checks out an existing remote branch using validated argv', async () => {
+      withDispatch(async () => ({ stdout: '', stderr: '' }));
+
+      const result = await createWorktree('/repo', 15, 'Repair PR', null, {
+        existingBranch: 'feature/original-pr',
+      });
+
+      expect(result).toMatchObject({ success: true, branch: 'feature/original-pr' });
+      expect(mockRunCommand).toHaveBeenCalledWith('git', [
+        'fetch',
+        'origin',
+        '+refs/heads/feature/original-pr:refs/remotes/origin/feature/original-pr',
+      ], { cwd: '/repo' });
+      expect(mockRunCommand).toHaveBeenCalledWith('git', [
+        'worktree', 'add', '--track', '-b', 'feature/original-pr',
+        '/repo-worktrees/task-15', 'origin/feature/original-pr',
+      ], { cwd: '/repo' });
+    });
+
+    it('rejects an invalid existing branch before invoking git', async () => {
+      const result = await createWorktree('/repo', 15, 'Repair PR', null, {
+        existingBranch: '--upload-pack=evil',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Invalid branch/);
+      expect(mockRunCommand).not.toHaveBeenCalled();
+    });
+
     it('rejects an invalid base branch returned from git rather than executing it', async () => {
       withDispatch(async (_cmd, args) => {
         // Simulate a malicious upstream HEAD with a flag-looking name.
@@ -508,6 +537,44 @@ describe('Worktree Service', () => {
   });
 
   describe('createPullRequest', () => {
+    it('guards push and PR creation immediately before each effect', async () => {
+      const order: string[] = [];
+      withDispatch(async (cmd, args) => {
+        if (args.includes('--show-current')) return { stdout: 'task/1-test\n', stderr: '' };
+        if (cmd === 'git' && args[0] === 'push') order.push('push');
+        if (cmd === 'gh') order.push('createPR');
+        return { stdout: 'https://github.com/u/r/pull/1\n', stderr: '' };
+      });
+
+      await createPullRequest('/repo', 1, 'Title', 'Body', {
+        beforeEffect: (action) => {
+          order.push(`guard:${action}`);
+        },
+      });
+
+      expect(order).toEqual(['guard:push', 'push', 'guard:createPR', 'createPR']);
+    });
+
+    it('does not create a PR when the fresh createPR guard denies it', async () => {
+      withDispatch(async (_cmd, args) => {
+        if (args.includes('--show-current')) return { stdout: 'task/1-test\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+      const denial = new Error('denied');
+
+      await expect(createPullRequest('/repo', 1, 'Title', 'Body', {
+        beforeEffect: (action) => {
+          if (action === 'createPR') throw denial;
+        },
+      })).rejects.toBe(denial);
+
+      expect(mockRunCommand).not.toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining(['create']),
+        expect.anything(),
+      );
+    });
+
     it('passes title and body as separate argv elements — no shell escaping', async () => {
       let capturedTitle: string | undefined;
       let capturedBody: string | undefined;
@@ -729,6 +796,24 @@ describe('Worktree Service', () => {
   });
 
   describe('pushChanges', () => {
+    it('guards immediately before pushing', async () => {
+      const order: string[] = [];
+      withDispatch(async (_cmd, args) => {
+        if (args.includes('--porcelain')) return { stdout: '', stderr: '' };
+        if (args.includes('--show-current')) return { stdout: 'task/1-test\n', stderr: '' };
+        if (args[0] === 'push') order.push('push');
+        return { stdout: '', stderr: '' };
+      });
+
+      await pushChanges('/repo', 1, 'commit msg', {
+        beforeEffect: (action) => {
+          order.push(`guard:${action}`);
+        },
+      });
+
+      expect(order).toEqual(['guard:push', 'push']);
+    });
+
     it('passes the validated branch to git push as a separate argv element', async () => {
       withDispatch(async (cmd, args) => {
         if (args.includes('--porcelain')) return { stdout: '', stderr: '' };

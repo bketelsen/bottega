@@ -24,6 +24,11 @@ vi.mock('../services/projectService.js', () => ({
 
 // Mock the agentRunner service
 vi.mock('../services/agentRunner.js', () => ({
+  AgentAlreadyRunningError: class AgentAlreadyRunningError extends Error {
+    constructor(public readonly runningAgent: unknown) {
+      super('An agent is already running for this task');
+    }
+  },
   startAgentRun: vi.fn(),
   getRunningAgentForTask: vi.fn()
 }));
@@ -31,7 +36,11 @@ vi.mock('../services/agentRunner.js', () => ({
 import agentRunsRoutes from './agent-runs.js';
 import { tasksDb, agentRunsDb } from '../database/db.js';
 import { hasProjectAccess } from '../services/projectService.js';
-import { startAgentRun, getRunningAgentForTask } from '../services/agentRunner.js';
+import {
+  AgentAlreadyRunningError,
+  startAgentRun,
+  getRunningAgentForTask,
+} from '../services/agentRunner.js';
 
 describe('Agent Runs Routes', () => {
   let app: import("express").Application;
@@ -307,6 +316,25 @@ describe('Agent Runs Routes', () => {
       expect(response.body.error).toBe('An agent is already running for this task');
       expect(response.body.runningAgent).toEqual(runningAgent);
       expect(startAgentRun).not.toHaveBeenCalled();
+    });
+
+    it('should return 409 when the database reservation loses a race', async () => {
+      const runningAgent = {
+        id: 2,
+        task_id: 1,
+        agent_type: 'review',
+        status: 'running',
+      };
+      vi.mocked(startAgentRun).mockRejectedValueOnce(
+        new AgentAlreadyRunningError(runningAgent as never),
+      );
+
+      const response = await request(app)
+        .post('/api/tasks/1/agent-runs')
+        .send({ agentType: 'implementation' });
+
+      expect(response.status).toBe(409);
+      expect(response.body.runningAgent).toEqual(runningAgent);
     });
 
     it('should return 500 if startAgentRun throws an error', async () => {

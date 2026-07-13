@@ -3,17 +3,17 @@
 // The GitHub webhook receives raw bodies (HMAC validation precedes JSON
 // parse), so the request body is opaque from the route's perspective —
 // we don't type the inbound shape here. Outbound responses follow the
-// "always 200, status field tells caller what happened" pattern that
-// keeps GitHub from retrying on expected rejections.
+// accepted deliveries return 202 before reconciliation starts; unsupported
+// deliveries return 200 so GitHub does not retry expected no-ops.
 
 import { expectType } from './_common';
 
 // ---- POST /api/webhooks/github -------------------------------------------
 
-export interface WebhookTriggeredResponse {
-  status: 'triggered';
-  taskId: number;
-  conversationId: number;
+export interface WebhookAcceptedResponse {
+  status: 'accepted';
+  event: string;
+  repository: string;
 }
 
 export interface WebhookIgnoredResponse {
@@ -31,14 +31,8 @@ export interface WebhookIgnoredResponse {
 }
 
 export type GitHubWebhookResponse =
-  | WebhookTriggeredResponse
+  | WebhookAcceptedResponse
   | WebhookIgnoredResponse;
-
-// 500 body for unexpected trigger failures.
-export interface WebhookErrorResponse {
-  error: 'Failed to trigger agent';
-  message: string;
-}
 
 // ---- GET /api/webhooks/health --------------------------------------------
 
@@ -50,8 +44,8 @@ export interface WebhookHealthResponse {
 // ---- Type-level smoke checks ---------------------------------------------
 
 expectType<GitHubWebhookResponse>({
-  status: 'triggered',
-  taskId: 0,
-  conversationId: 0,
+  status: 'accepted',
+  event: 'issues',
+  repository: 'owner/repo',
 });
 expectType<GitHubWebhookResponse>({ status: 'ignored' });
