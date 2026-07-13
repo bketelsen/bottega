@@ -1,5 +1,10 @@
 # Bottega + Yeti Migration Plan
 
+> **Implementation status:** The non-optional phases of this plan are now
+> implemented. For current configuration, behavior, and operating guidance,
+> read [`github-automation.md`](./github-automation.md). Automatic merge and
+> optional Yeti maintenance jobs remain deferred.
+
 ## Goal
 
 Unify Bottega and Yeti behind one Bottega runtime without rebuilding either
@@ -105,11 +110,13 @@ or prompt-injected agent would require restricted tools, isolated credentials,
 or sandboxing and is outside this migration. Do not claim that the tier alone
 prevents every agent-initiated side effect.
 
-### Use the project owner as the automation identity
+### Use the task or project owner as the automation identity
 
 Every agent run requires an acting Bottega user with agent model settings and
-provider credentials. GitHub reconciliation uses the existing
-`projects.user_id`; do not add a service-user model in the first migration.
+provider credentials. GitHub reconciliation preserves `tasks.user_id` for an
+existing member-owned task and falls back to `projects.user_id` for a newly
+imported or ownerless task. Do not add a service-user model in the first
+migration.
 
 Before `github_automation_enabled` can be turned on, validate that the project
 owner is active, has Git identity where required, has model settings for the
