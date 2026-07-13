@@ -12,8 +12,11 @@ import {
   createPullRequest as worktreeCreatePR,
   getPullRequestStatus,
   getWorktreeStatus,
+  pushChanges,
+  type GitHubEffectOptions,
 } from './worktree.js';
 import type { TaskRow } from '../database/db.js';
+import { syncTaskPullRequest } from './github/reconcile.js';
 
 export interface PRResult {
   success: boolean;
@@ -38,7 +41,10 @@ export async function createOrUpdatePR(
   taskId: number,
   title: string,
   body: string,
+  options: GitHubEffectOptions = {},
 ): Promise<PRResult> {
+  const existing = await getPullRequestStatus(repoPath, taskId);
+
   // 1. Check for uncommitted changes -> commit
   const changesResult = await hasUncommittedChanges(repoPath, taskId);
   if (changesResult.success && changesResult.hasChanges) {
@@ -48,6 +54,17 @@ export async function createOrUpdatePR(
     }
   }
 
+  // An open branch PR remains reusable, but local commits must reach it first.
+  // Closed and merged PRs do not prevent creating a replacement PR.
+  if (existing.success && existing.exists && existing.state === 'OPEN' && existing.url) {
+    const pushResult = await pushChanges(repoPath, taskId, title, options);
+    if (!pushResult.success) {
+      return { success: false, error: `Failed to push: ${pushResult.error}` };
+    }
+    await syncTaskPullRequest(taskId, pullRequestNumber(existing.url) ?? undefined);
+    return { success: true, url: existing.url };
+  }
+
   // 2. Check commits ahead of main
   const statusResult = await getWorktreeStatus(repoPath, taskId);
   if (statusResult.success && statusResult.ahead === 0) {
@@ -55,7 +72,17 @@ export async function createOrUpdatePR(
   }
 
   // 3. Create PR
-  return worktreeCreatePR(repoPath, taskId, title, body);
+  const result = await worktreeCreatePR(repoPath, taskId, title, body, options);
+  if (result.success) {
+    await syncTaskPullRequest(taskId, pullRequestNumber(result.url) ?? undefined);
+  }
+  return result;
+}
+
+function pullRequestNumber(url: string | undefined): number | null {
+  if (!url) return null;
+  const match = /\/pull\/(\d+)(?:\/|$)/.exec(url);
+  return match ? Number(match[1]) : null;
 }
 
 /**
@@ -83,3 +110,5 @@ export async function getCIStatusWithDetails(
 export function shouldRunPrAgent(task: Pick<TaskRow, 'workflow_complete' | 'pr_agent_complete'>): boolean {
   return task.workflow_complete === 1 && task.pr_agent_complete === 0;
 }
+
+export const _internal = { pullRequestNumber };

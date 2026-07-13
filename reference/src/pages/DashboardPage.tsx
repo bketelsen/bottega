@@ -12,11 +12,7 @@ import Settings, { type SettingsTab } from '../components/Settings';
 import ProjectForm from '../components/ProjectForm';
 import { useTaskContext } from '../contexts/TaskContext';
 import type { ProjectRow, TaskRow } from '../../shared/types/db';
-
-interface ProjectSubmitPayload {
-  name: string;
-  repoFolderPath: string;
-}
+import type { ProjectFormSubmitData } from '../components/ProjectForm';
 
 interface ActionResult {
   success: boolean;
@@ -56,13 +52,11 @@ function DashboardPage() {
   }, []);
 
   // Handle project creation from modal
-  const handleProjectSubmit = async ({
-    name,
-    repoFolderPath,
-  }: ProjectSubmitPayload): Promise<ActionResult> => {
+  const handleProjectSubmit = async (data: ProjectFormSubmitData): Promise<ActionResult> => {
+    const { name, repoFolderPath, ...options } = data;
     setIsCreatingProject(true);
     try {
-      const result = await createProject(name, repoFolderPath);
+      const result = await createProject(name, repoFolderPath, options);
       if (result.success) {
         setShowProjectForm(false);
       }

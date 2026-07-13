@@ -8,7 +8,7 @@
  * by the ConversationAdapter when streaming completes.
  */
 
-import { tasksDb, agentRunsDb, conversationsDb, userDb } from '../database/db.js';
+import { tasksDb, agentRunsDb, conversationsDb, projectsDb, userDb } from '../database/db.js';
 import { startConversation } from './conversationAdapter.js';
 import { updateUserBadge } from './notifications.js';
 import { buildContextPrompt, getTaskDocPath, getRecordingPath } from './documentation.js';
@@ -33,6 +33,7 @@ import type {
   BroadcastToTaskSubscribersFn,
 } from '@shared/websocket/messages';
 import type { VideoConfig } from './conversation/types.js';
+import { assertCapability } from './github/capabilities.js';
 
 export interface StartAgentRunOptions {
   broadcastFn?: BroadcastFn | undefined;
@@ -44,10 +45,50 @@ export interface StartAgentRunOptions {
   } | undefined;
 }
 
+type AgentRunnerBroadcastDefaults = Pick<
+  StartAgentRunOptions,
+  'broadcastFn' | 'broadcastToTaskSubscribersFn'
+>;
+
+let broadcastDefaults: AgentRunnerBroadcastDefaults = {};
+
+export function configureAgentRunnerBroadcastDefaults(
+  defaults: AgentRunnerBroadcastDefaults,
+): void {
+  broadcastDefaults = { ...defaults };
+}
+
 export interface StartAgentRunResult {
   agentRun: AgentRunRow;
   conversation: CreatedConversation;
   claudeSessionId: string;
+}
+
+export class AgentAlreadyRunningError extends Error {
+  constructor(public readonly runningAgent: AgentRunRow | null) {
+    super('An agent is already running for this task');
+    this.name = 'AgentAlreadyRunningError';
+  }
+}
+
+function assertPrAgentCapability(projectId: number, userId: number | undefined): void {
+  if (userId == null) return;
+  const project = projectsDb.getById(projectId, userId);
+  if (!project?.github_repo) return;
+  assertCapability(project, 'push');
+  assertCapability(project, 'createPR');
+}
+
+function isRunningAgentConstraintError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const sqliteError = error as { code?: string; message?: string };
+  return (
+    sqliteError.code?.startsWith('SQLITE_CONSTRAINT') === true
+    && (
+      sqliteError.message?.includes('task_agent_runs.task_id') === true
+      || sqliteError.message?.includes('idx_task_agent_runs_one_running') === true
+    )
+  );
 }
 
 /**
@@ -59,7 +100,11 @@ export async function startAgentRun(
   agentType: AgentType,
   options: StartAgentRunOptions = {},
 ): Promise<StartAgentRunResult> {
-  const { broadcastFn, broadcastToTaskSubscribersFn, userId } = options;
+  const {
+    broadcastFn,
+    broadcastToTaskSubscribersFn,
+    userId,
+  } = { ...broadcastDefaults, ...options };
 
   // Get task and project info
   const taskWithProject = tasksDb.getWithProject(taskId);
@@ -98,6 +143,7 @@ export async function startAgentRun(
       message = await generateRefinementMessage(taskDocPath, taskId);
       break;
     case 'pr': {
+      assertPrAgentCapability(taskWithProject.project_id, effectiveUserId);
       // Before the PR agent runs, deterministically bring the branch up to
       // date with origin/<main>. A task can sit behind main after a long
       // implement⇄review loop; a clean rebase here means the PR is mergeable
@@ -186,91 +232,109 @@ export async function startAgentRun(
     };
   }
 
-  // Increment workflow run count (for infinite loop prevention)
-  tasksDb.incrementRunCount(taskId);
-
-  // Create agent run record (stamped with provider for diagnostics).
-  // (provider, model, effort) were loaded above so credential
-  // validation could see the right backend.
-  void agentSettings;
-  const agentRun = agentRunsDb.create(taskId, agentType, null, provider);
+  // The partial unique index makes this insert the authoritative reservation.
+  // Pre-insert checks in callers are only an optimization.
+  let agentRun: AgentRunRow;
+  try {
+    agentRun = agentRunsDb.create(taskId, agentType, null, provider);
+  } catch (error) {
+    if (isRunningAgentConstraintError(error)) {
+      throw new AgentAlreadyRunningError(getRunningAgentForTask(taskId));
+    }
+    throw error;
+  }
   console.log(
     `[AgentRunner] Created agent run ${agentRun.id} (${agentType}) for task ${taskId} (provider=${provider})`,
   );
 
-  // Set agent run status to 'running' immediately
-  agentRunsDb.updateStatus(agentRun.id, 'running');
-  agentRun.status = 'running';
+  let conversationId: number | null = null;
+  try {
+    // Losing reservation races never reach this increment.
+    tasksDb.incrementRunCount(taskId);
 
-  // Create conversation. Stamp the configured (provider, model, effort) so
-  // follow-up messages dispatch to the right backend and resume on the exact
-  // same model — sendMessage resolves all three off this row, and a mismatch
-  // would feed an OpenAI model name into the Anthropic SDK (the gpt-5.5 → 404
-  // bug).
-  const conversation = conversationsDb.create(taskId, provider, model, effort);
-  console.log(
-    `[AgentRunner] Created conversation ${conversation.id} for task ${taskId} (provider=${provider}, model=${model})`,
-  );
+    // Set agent run status to 'running' immediately
+    agentRunsDb.updateStatus(agentRun.id, 'running');
+    agentRun.status = 'running';
 
-  // Link conversation to agent run
-  agentRunsDb.linkConversation(agentRun.id, conversation.id);
-  console.log(`[AgentRunner] Linked conversation ${conversation.id} to agent run ${agentRun.id}`);
+    // Create conversation. Stamp the configured (provider, model, effort) so
+    // follow-up messages dispatch to the right backend and resume on the exact
+    // same model.
+    const conversation = conversationsDb.create(taskId, provider, model, effort);
+    conversationId = conversation.id;
+    console.log(
+      `[AgentRunner] Created conversation ${conversation.id} for task ${taskId} (provider=${provider}, model=${model})`,
+    );
 
-  // Broadcast agent run created/running to task subscribers
-  if (broadcastToTaskSubscribersFn) {
-    broadcastToTaskSubscribersFn(taskId, {
+    // Link conversation to agent run
+    agentRunsDb.linkConversation(agentRun.id, conversation.id);
+    console.log(`[AgentRunner] Linked conversation ${conversation.id} to agent run ${agentRun.id}`);
+
+    // Broadcast agent run created/running to task subscribers
+    if (broadcastToTaskSubscribersFn) {
+      broadcastToTaskSubscribersFn(taskId, {
+        type: 'agent-run-updated',
+        agentRun: {
+          id: agentRun.id,
+          status: 'running',
+          agent_type: agentType,
+          conversation_id: conversation.id,
+        },
+      });
+    }
+
+    // Update task status to 'in_progress' if it's currently 'pending'
+    if (taskWithProject.status === 'pending') {
+      tasksDb.update(taskId, { status: 'in_progress' });
+      console.log(`[AgentRunner] Updated task ${taskId} status to in_progress`);
+
+      // Send badge update notification (fire and forget)
+      if (userId) {
+        updateUserBadge(userId).catch((err: unknown) => {
+          console.error('[AgentRunner] Failed to update badge:', err);
+        });
+      }
+    }
+
+    // Build context prompt from task markdown + input files (central archive)
+    const contextPrompt = buildContextPrompt(taskWithProject.project_id, taskId);
+
+    // Prevent implementation and yolo agents from delegating to sub-agents.
+    const disallowedTools = agentType === 'implementation' || agentType === 'yolo' ? ['Agent'] : [];
+
+    // Re-read capability state immediately before handing control to the agent.
+    if (agentType === 'pr') {
+      assertPrAgentCapability(taskWithProject.project_id, effectiveUserId);
+    }
+
+    // The adapter handles streaming lifecycle, status updates, and chaining.
+    const { claudeSessionId } = await startConversation(taskId, message, {
+      broadcastFn,
+      broadcastToTaskSubscribersFn,
+      userId: effectiveUserId,
+      customSystemPrompt: contextPrompt,
+      permissionMode: 'bypassPermissions',
+      conversationId: conversation.id,
+      provider,
+      model,
+      ...(effort !== null ? { effort } : {}),
+      disallowedTools,
+      videoConfig: videoConfig,
+    });
+
+    return { agentRun, conversation, claudeSessionId };
+  } catch (error) {
+    agentRunsDb.updateStatus(agentRun.id, 'failed');
+    broadcastToTaskSubscribersFn?.(taskId, {
       type: 'agent-run-updated',
       agentRun: {
         id: agentRun.id,
-        status: 'running',
+        status: 'failed',
         agent_type: agentType,
-        conversation_id: conversation.id,
+        conversation_id: conversationId,
       },
     });
+    throw error;
   }
-
-  // Update task status to 'in_progress' if it's currently 'pending'
-  if (taskWithProject.status === 'pending') {
-    tasksDb.update(taskId, { status: 'in_progress' });
-    console.log(`[AgentRunner] Updated task ${taskId} status to in_progress`);
-
-    // Send badge update notification (fire and forget)
-    if (userId) {
-      updateUserBadge(userId).catch((err: unknown) => {
-        console.error('[AgentRunner] Failed to update badge:', err);
-      });
-    }
-  }
-
-  // Build context prompt from task markdown + input files (central archive)
-  const contextPrompt = buildContextPrompt(taskWithProject.project_id, taskId);
-
-  // (provider, model, effort) loaded above before agentRunsDb.create
-  // so the agent run row carries the right provider stamp.
-
-  // Prevent implementation and yolo agents from delegating to sub-agents via the Agent tool.
-  // Without this, they may spawn a sub-agent that runs for hours with zero visibility
-  // in the parent conversation's JSONL. YOLO is designed as one continuous conversation.
-  const disallowedTools = agentType === 'implementation' || agentType === 'yolo' ? ['Agent'] : [];
-
-  // Start conversation via adapter
-  // The adapter handles all lifecycle events (streaming-started, streaming-ended,
-  // agent status updates, notifications, and chaining)
-  const { claudeSessionId } = await startConversation(taskId, message, {
-    broadcastFn,
-    broadcastToTaskSubscribersFn,
-    userId: effectiveUserId,
-    customSystemPrompt: contextPrompt,
-    permissionMode: 'bypassPermissions',
-    conversationId: conversation.id,
-    provider,
-    model,
-    ...(effort !== null ? { effort } : {}),
-    disallowedTools,
-    videoConfig: videoConfig,
-  });
-
-  return { agentRun, conversation, claudeSessionId };
 }
 
 /**

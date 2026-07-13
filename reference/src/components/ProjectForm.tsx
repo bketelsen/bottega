@@ -9,10 +9,16 @@ import { useState, useEffect, type FormEvent } from 'react';
 import { X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { useAuth } from '../contexts/AuthContext';
+import type { ProjectAutonomyTier } from '../../shared/api/projects';
+import GitHubProjectSettings from './GitHubProjectSettings';
 
 export interface ProjectFormSubmitData {
   name: string;
   repoFolderPath: string;
+  githubRepo?: string | null;
+  githubAutomationEnabled?: boolean;
+  autonomyTier?: ProjectAutonomyTier;
 }
 
 export interface ProjectFormSubmitResult {
@@ -33,14 +39,22 @@ function ProjectForm({
   onSubmit,
   isSubmitting = false,
 }: ProjectFormProps) {
+  const { user } = useAuth();
+  const isAdmin = user?.is_admin === 1;
   const [name, setName] = useState('');
   const [repoFolderPath, setRepoFolderPath] = useState('');
+  const [githubRepo, setGithubRepo] = useState('');
+  const [githubAutomationEnabled, setGithubAutomationEnabled] = useState(false);
+  const [autonomyTier, setAutonomyTier] = useState<ProjectAutonomyTier>('advisory');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setName('');
       setRepoFolderPath('');
+      setGithubRepo('');
+      setGithubAutomationEnabled(false);
+      setAutonomyTier('advisory');
       setError(null);
     }
   }, [isOpen]);
@@ -63,6 +77,11 @@ function ProjectForm({
       const result = await onSubmit({
         name: name.trim(),
         repoFolderPath: repoFolderPath.trim(),
+        ...(isAdmin && {
+          githubRepo: githubRepo.trim() || null,
+          githubAutomationEnabled,
+          autonomyTier,
+        }),
       });
 
       if (!result.success) {
@@ -125,6 +144,20 @@ function ProjectForm({
                 autoFocus
               />
             </div>
+
+            {isAdmin && (
+              <GitHubProjectSettings
+                githubRepo={githubRepo}
+                onGithubRepoChange={setGithubRepo}
+                autonomyTier={autonomyTier}
+                onAutonomyTierChange={setAutonomyTier}
+                githubAutomationEnabled={githubAutomationEnabled}
+                onGithubAutomationEnabledChange={setGithubAutomationEnabled}
+                className="space-y-4 border-t border-border pt-4"
+                titleClassName="text-sm font-semibold text-foreground"
+                repoInputClassName="font-mono"
+              />
+            )}
 
             {/* Repository folder path */}
             <div className="space-y-2">

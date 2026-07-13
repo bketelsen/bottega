@@ -27,6 +27,7 @@ import type {
   AgentRunRow,
 } from '../../shared/types/db';
 import type {
+  CreateProjectRequest,
   UpdateProjectRequest,
 } from '../../shared/api/projects';
 import type {
@@ -91,6 +92,7 @@ export interface TaskContextValue {
   createProject: (
     name: string,
     repoFolderPath: string,
+    options?: Omit<CreateProjectRequest, 'name' | 'repoFolderPath'>,
   ) => Promise<CreateProjectResult>;
   updateProject: (
     id: number,
@@ -262,9 +264,10 @@ export function TaskContextProvider({ children }: { children: ReactNode }) {
     async (
       name: string,
       repoFolderPath: string,
+      options: Omit<CreateProjectRequest, 'name' | 'repoFolderPath'> = {},
     ): Promise<CreateProjectResult> => {
       try {
-        const response = await api.projects.create(name, repoFolderPath);
+        const response = await api.projects.create({ name, repoFolderPath, ...options });
         if (response.ok) {
           const newProject = await response.json();
           setProjects((prev) => [...prev, newProject]);

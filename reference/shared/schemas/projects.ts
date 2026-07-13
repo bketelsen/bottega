@@ -2,6 +2,14 @@
 // (`server/routes/projects.ts`).
 
 import { z } from 'zod';
+import { GitHubRepositorySchema } from './github.js';
+
+const OptionalGitHubRepoSchema = z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? null : value,
+  GitHubRepositorySchema.nullable().optional(),
+);
+
+export const ProjectAutonomyTierSchema = z.enum(['advisory', 'issues', 'pr', 'automerge']);
 
 export const CreateProjectBodySchema = z.object({
   name: z.string().trim().min(1, 'Project name is required'),
@@ -10,6 +18,9 @@ export const CreateProjectBodySchema = z.object({
     .trim()
     .min(1, 'Repository folder path is required'),
   subprojectPath: z.string().optional(),
+  githubRepo: OptionalGitHubRepoSchema,
+  githubAutomationEnabled: z.boolean().optional(),
+  autonomyTier: ProjectAutonomyTierSchema.optional(),
 });
 export type CreateProjectBody = z.infer<typeof CreateProjectBodySchema>;
 
@@ -19,5 +30,8 @@ export const UpdateProjectBodySchema = z.object({
   // The DB layer accepts `null` to clear the column, and the existing
   // type `UpdateProjectRequest` allows `undefined`. Be permissive here.
   subprojectPath: z.string().nullable().optional(),
+  githubRepo: OptionalGitHubRepoSchema,
+  githubAutomationEnabled: z.boolean().optional(),
+  autonomyTier: ProjectAutonomyTierSchema.optional(),
 });
 export type UpdateProjectBody = z.infer<typeof UpdateProjectBodySchema>;

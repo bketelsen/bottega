@@ -168,6 +168,44 @@ export function writeTaskDoc(projectId: number, taskId: number, content: string)
   }
 }
 
+export interface GeneratedSectionOptions {
+  isRunActive: () => boolean;
+}
+
+/** Replace one application-owned section without overwriting an active agent edit. */
+export function updateGeneratedTaskDocSection(
+  projectId: number,
+  taskId: number,
+  sectionKey: string,
+  content: string,
+  options: GeneratedSectionOptions,
+): boolean {
+  if (!/^[a-z0-9-]+$/.test(sectionKey)) {
+    throw new Error(`Invalid generated section key: ${sectionKey}`);
+  }
+  if (options.isRunActive()) return false;
+
+  const start = `<!-- bottega:generated:${sectionKey}:start -->`;
+  const end = `<!-- bottega:generated:${sectionKey}:end -->`;
+  const section = `${start}\n${content.trim()}\n${end}`;
+  const current = readTaskDoc(projectId, taskId);
+  const startIndex = current.indexOf(start);
+  const endIndex = startIndex === -1 ? -1 : current.indexOf(end, startIndex + start.length);
+
+  let next: string;
+  if (startIndex !== -1 && endIndex !== -1) {
+    next = `${current.slice(0, startIndex)}${section}${current.slice(endIndex + end.length)}`;
+  } else {
+    next = current.trimEnd() ? `${current.trimEnd()}\n\n${section}\n` : `${section}\n`;
+  }
+
+  // Re-check immediately before the whole-document write to narrow the race
+  // with an agent starting outside reconciliation's keyed lock.
+  if (options.isRunActive()) return false;
+  writeTaskDoc(projectId, taskId, next);
+  return true;
+}
+
 export function deleteTaskDoc(projectId: number, taskId: number): boolean {
   try {
     const docPath = getTaskDocPath(projectId, taskId);

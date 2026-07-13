@@ -79,7 +79,7 @@ describe('API Client - Phase 5', () => {
     });
 
     it('create() should call POST /api/projects with name and repoFolderPath', async () => {
-      await api.projects.create('My Project', '/path/to/repo');
+      await api.projects.create({ name: 'My Project', repoFolderPath: '/path/to/repo' });
 
       expect(mockFetch).toHaveBeenCalledWith('/api/projects', expect.objectContaining({
         method: 'POST',

@@ -14,6 +14,9 @@ import { api } from '../utils/api';
 import type { ProjectRow } from '../../shared/types/db';
 import type { CleanupOldCompletedTasksResponse } from '../../shared/api/tasks';
 import type { ApiError } from '../../shared/api/_common';
+import type { ProjectAutonomyTier, UpdateProjectRequest } from '../../shared/api/projects';
+import { useAuth } from '../contexts/AuthContext';
+import GitHubProjectSettings from '../components/GitHubProjectSettings';
 
 interface WebServerConfigState {
   serveSymlinkPath: string;
@@ -24,6 +27,8 @@ interface WebServerConfigState {
 function ProjectEditPageWrapper() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = user?.is_admin === 1;
   const {
     projects,
     loadProjects,
@@ -45,6 +50,9 @@ function ProjectEditPageWrapper() {
   const [cleanupResult, setCleanupResult] = useState<CleanupOldCompletedTasksResponse | null>(null);
 
   const [subprojectPath, setSubprojectPath] = useState('');
+  const [githubRepo, setGithubRepo] = useState('');
+  const [githubAutomationEnabled, setGithubAutomationEnabled] = useState(false);
+  const [autonomyTier, setAutonomyTier] = useState<ProjectAutonomyTier>('advisory');
 
   const [serveSymlinkPath, setServeSymlinkPath] = useState('');
   const [systemdServiceName, setSystemdServiceName] = useState('');
@@ -88,6 +96,9 @@ function ProjectEditPageWrapper() {
     if (project) {
       setName(project.name || '');
       setSubprojectPath(project.subproject_path || '');
+      setGithubRepo(project.github_repo || '');
+      setGithubAutomationEnabled(project.github_automation_enabled === 1);
+      setAutonomyTier(project.autonomy_tier);
       setHasChanges(false);
       setError(null);
     }
@@ -123,11 +134,16 @@ function ProjectEditPageWrapper() {
     if (!project) return;
     const nameChanged = name !== (project.name || '');
     const subprojectChanged = subprojectPath !== (project.subproject_path || '');
+    const githubChanged = isAdmin && (
+      githubRepo !== (project.github_repo || '') ||
+      githubAutomationEnabled !== (project.github_automation_enabled === 1) ||
+      autonomyTier !== project.autonomy_tier
+    );
     const webServerChanged = serveSymlinkPath !== initialWebServerConfig.serveSymlinkPath ||
       systemdServiceName !== initialWebServerConfig.systemdServiceName ||
       appUrl !== initialWebServerConfig.appUrl;
-    setHasChanges(nameChanged || subprojectChanged || webServerChanged);
-  }, [name, project, subprojectPath, serveSymlinkPath, systemdServiceName, appUrl, initialWebServerConfig]);
+    setHasChanges(nameChanged || subprojectChanged || webServerChanged || githubChanged);
+  }, [name, project, subprojectPath, serveSymlinkPath, systemdServiceName, appUrl, initialWebServerConfig, isAdmin, githubRepo, githubAutomationEnabled, autonomyTier]);
 
   // Handle save
   const handleSave = useCallback(async () => {
@@ -142,10 +158,23 @@ function ProjectEditPageWrapper() {
     setError(null);
 
     try {
-      const result = await updateProject(project.id, {
+      const updates: UpdateProjectRequest = {
         name: name.trim(),
         subprojectPath: subprojectPath.trim() || undefined,
-      });
+      };
+      if (isAdmin) {
+        const submittedGithubRepo = githubRepo.trim() || null;
+        if (submittedGithubRepo !== project.github_repo) {
+          updates.githubRepo = submittedGithubRepo;
+        }
+        if (githubAutomationEnabled !== (project.github_automation_enabled === 1)) {
+          updates.githubAutomationEnabled = githubAutomationEnabled;
+        }
+        if (autonomyTier !== project.autonomy_tier) {
+          updates.autonomyTier = autonomyTier;
+        }
+      }
+      const result = await updateProject(project.id, updates);
 
       if (!result.success) {
         setError(result.error || 'Failed to save project');
@@ -177,7 +206,7 @@ function ProjectEditPageWrapper() {
     } finally {
       setIsSaving(false);
     }
-  }, [project, name, subprojectPath, serveSymlinkPath, systemdServiceName, appUrl, initialWebServerConfig, updateProject, navigate, projectId]);
+  }, [project, name, subprojectPath, githubRepo, githubAutomationEnabled, autonomyTier, isAdmin, serveSymlinkPath, systemdServiceName, appUrl, initialWebServerConfig, updateProject, navigate, projectId]);
 
   // Handle delete
   const handleDelete = useCallback(async () => {
@@ -352,6 +381,20 @@ function ProjectEditPageWrapper() {
           </div>
 
           {/* Web Server Configuration */}
+          {isAdmin && (
+            <GitHubProjectSettings
+              githubRepo={githubRepo}
+              onGithubRepoChange={setGithubRepo}
+              autonomyTier={autonomyTier}
+              onAutonomyTierChange={setAutonomyTier}
+              githubAutomationEnabled={githubAutomationEnabled}
+              onGithubAutomationEnabledChange={setGithubAutomationEnabled}
+              className="pt-6 border-t border-border space-y-4"
+              titleClassName="text-sm font-medium text-foreground"
+              repoInputClassName="font-mono text-sm"
+            />
+          )}
+
           <div className="pt-6 border-t border-border">
             <div className="space-y-4">
               <div className="flex items-center gap-2">

@@ -10,7 +10,7 @@ The app uses a **task-driven development model**:
 - **Task** — a unit of work with markdown documentation, its own git worktree, and workflow flags that gate the agentic loop.
 - **Conversation** — a Claude session linked to a task. Manual chats and agent runs both create conversations.
 
-Users create projects, define tasks, and either chat with Claude scoped to a task or launch automated agents that plan → implement → review → refine → PR with optional GitHub-webhook re-triggering on PR comments.
+Users create projects, define tasks, and either chat with Claude scoped to a task or launch automated agents that plan → implement → review → refine → PR. Linked GitHub projects can also import labeled issues, react to review and CI evidence, and recover missed webhook events through polling.
 
 ## Architecture at a glance
 
@@ -69,6 +69,8 @@ This directory is organized by architectural concern. Pull whichever file matche
 | **[`task-management.md`](./task-management.md)** | The domain model (projects / tasks / conversations), the SQLite schema, `TaskContext` state + navigation, URL routing, the 4-screen UI flow. |
 | **[`authentication.md`](./authentication.md)** | App-level auth (JWT + per-user API keys, NOT Claude OAuth), `token_version` invalidation, rate limiting, the project-membership authorization model, admin panel, `is_technical`. |
 | **[`api-reference.md`](./api-reference.md)** | Flat lookup table of REST endpoints and WebSocket message types. Read the topical docs for the **why**; read this for the **shape**. |
+| **[`github-automation.md`](./github-automation.md)** | Configure and operate GitHub issue intake, autonomy tiers, PR feedback, webhooks, recovery polling, and safety controls. |
+| **[`yeti-migration-plan.md`](./yeti-migration-plan.md)** | Historical implementation plan and architectural rationale for folding Yeti's GitHub automation into Bottega. |
 
 ## Tech stack
 
@@ -130,4 +132,4 @@ pnpm dev                 # frontend on :5173, backend on :3001
 pnpm test:run            # unit + integration tests (Vitest)
 ```
 
-`JWT_SECRET` is required in `.env` (`openssl rand -hex 64`). `OPENAI_API_KEY` is needed if you want voice input. `GITHUB_WEBHOOK_SECRET` is needed for the PR-comment trigger. Per-user Claude OAuth tokens are provisioned through the in-app login flow (Settings → Connect Claude) — see [`claude-sdk-integration.md`](./claude-sdk-integration.md#authentication-claude-subscription-oauth).
+`JWT_SECRET` is required in `.env` (`openssl rand -hex 64`). `OPENAI_API_KEY` is needed if you want voice input. `GITHUB_WEBHOOK_SECRET` is needed for GitHub event delivery; see [`github-automation.md`](./github-automation.md) for repository and webhook setup. Per-user Claude OAuth tokens are provisioned through the in-app login flow (Settings → Connect Claude) — see [`claude-sdk-integration.md`](./claude-sdk-integration.md#authentication-claude-subscription-oauth).

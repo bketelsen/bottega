@@ -79,6 +79,12 @@ import userAgentModelSettingsRoutes from './routes/userAgentModelSettings.js';
 import { initializeDatabase, agentRunsDb } from './database/db.js';
 import { getProject } from './services/projectService.js';
 import { transcribeAudio } from './services/transcription.js';
+import { githubRecoveryScheduler } from './services/github/scheduler.js';
+import { configureAgentRunnerBroadcastDefaults } from './services/agentRunner.js';
+import {
+  drainGitHubWebhooks,
+  stopAcceptingGitHubWebhooks,
+} from './services/webhookService.js';
 import {
   authenticateToken,
   requireAdmin,
@@ -172,6 +178,11 @@ wss.on('close', () => {
 const broadcastToTaskSubscribers = makeBroadcastToTaskSubscribers(wss);
 const broadcastToConversationSubscribers =
   makeBroadcastToConversationSubscribers(wss);
+
+configureAgentRunnerBroadcastDefaults({
+  broadcastFn: broadcastToConversationSubscribers,
+  broadcastToTaskSubscribersFn: broadcastToTaskSubscribers,
+});
 
 app.locals.wss = wss;
 app.locals.broadcastToTaskSubscribers = broadcastToTaskSubscribers;
@@ -449,6 +460,8 @@ async function startServer(): Promise<void> {
       );
     }
 
+    githubRecoveryScheduler.start();
+
     console.log(`${c.info('[INFO]')} Using Claude Agents SDK for Claude integration`);
     if (HEADLESS) {
       console.log(
@@ -487,20 +500,32 @@ async function startServer(): Promise<void> {
   }
 }
 
-process.on('SIGTERM', () => {
-  console.log('[Server] SIGTERM received, shutting down gracefully...');
-  server.close(() => {
-    console.log('[Server] HTTP server closed');
-    process.exit(0);
-  });
-});
+let shutdownPromise: Promise<void> | undefined;
 
-process.on('SIGINT', () => {
-  console.log('[Server] SIGINT received, shutting down gracefully...');
-  server.close(() => {
+function shutdown(signal: string): Promise<void> {
+  shutdownPromise ??= (async () => {
+    console.log(`[Server] ${signal} received, shutting down gracefully...`);
+    stopAcceptingGitHubWebhooks();
+    githubRecoveryScheduler.stop();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    await Promise.all([
+      githubRecoveryScheduler.drain(),
+      drainGitHubWebhooks(),
+    ]);
     console.log('[Server] HTTP server closed');
-    process.exit(0);
+  })();
+  return shutdownPromise;
+}
+
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    void shutdown(signal).then(() => process.exit(0), (error: unknown) => {
+      console.error('[Server] Graceful shutdown failed:', error);
+      process.exit(1);
+    });
   });
-});
+}
 
 void startServer();

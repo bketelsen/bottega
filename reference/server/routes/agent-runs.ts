@@ -1,7 +1,11 @@
 import express, { type Request, type Response } from 'express';
 import { tasksDb, agentRunsDb } from '../database/db.js';
 import { hasProjectAccess } from '../services/projectService.js';
-import { startAgentRun, getRunningAgentForTask } from '../services/agentRunner.js';
+import {
+  AgentAlreadyRunningError,
+  startAgentRun,
+  getRunningAgentForTask,
+} from '../services/agentRunner.js';
 import { ProviderCredentialsMissingError } from '../services/credentials/types.js';
 import type { AgentType } from '../../shared/types/db.js';
 import type { ApiError } from '../../shared/api/_common.js';
@@ -112,6 +116,12 @@ router.post(
 
       res.status(201).json(agentRun);
     } catch (error) {
+      if (error instanceof AgentAlreadyRunningError) {
+        return res.status(409).json({
+          error: error.message,
+          ...(error.runningAgent ? { runningAgent: error.runningAgent } : {}),
+        });
+      }
       if (error instanceof ProviderCredentialsMissingError) {
         // 403 = user needs to authenticate the configured provider.
         // The body carries `provider` so the frontend can open the

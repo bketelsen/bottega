@@ -18,8 +18,6 @@ import { upload } from '../middleware/upload.js';
 import { notifyTaskStatusChange } from '../services/notifications.js';
 import { forceCompleteRunningAgents } from '../services/agentRunner.js';
 import {
-  isGitRepository,
-  createWorktree,
   removeWorktree,
   worktreeExists,
   getWorktreeStatus,
@@ -29,8 +27,14 @@ import {
   hasUncommittedChanges,
   pushChanges,
 } from '../services/worktree.js';
+import { createTaskWithWorkspace, TaskCreationError } from '../services/taskCreation.js';
 import { createOrUpdatePR } from '../services/prService.js';
 import { switchWorktree } from '../services/webServerManager.js';
+import {
+  assertCapability,
+  GitHubCapabilityError,
+  type GitHubAction,
+} from '../services/github/capabilities.js';
 import type { TaskUpdates } from '../database/db.js';
 import type { ApiError } from '../../shared/api/_common.js';
 import { validateBody, validateParams, validateQuery } from '../middleware/validate.js';
@@ -66,6 +70,25 @@ import {
 } from '../../shared/schemas/tasks.js';
 
 const router = express.Router();
+
+function freshGitHubEffectGuard(projectId: number, userId: number) {
+  return (action: Extract<GitHubAction, 'push' | 'createPR'>): void => {
+    const project = getProject(projectId, userId);
+    if (!project) {
+      throw new Error(`Project ${projectId} not found`);
+    }
+    // Local-only projects retain their existing worktree behavior.
+    if (project.github_repo) {
+      assertCapability(project, action);
+    }
+  };
+}
+
+function sendGitHubCapabilityError(res: Response<unknown>, error: unknown): boolean {
+  if (!(error instanceof GitHubCapabilityError)) return false;
+  res.status(403).json({ error: error.message } satisfies ApiError);
+  return true;
+}
 
 router.get(
   '/tasks',
@@ -128,44 +151,20 @@ router.post(
 
       const { title, description, yolo_mode } = req.validated!.body as CreateTaskBody;
 
-      const isGit = await isGitRepository(project.repo_folder_path);
-
-      const task = tasksDb.create(
-        projectId,
-        title?.trim() || null,
-        !!yolo_mode,
+      const task = await createTaskWithWorkspace({
+        project,
         userId,
-      ) as unknown as { id: number; [k: string]: unknown };
-
-      if (isGit) {
-        const result = await createWorktree(
-          project.repo_folder_path,
-          task.id,
-          title,
-          project.subproject_path,
-        );
-
-        if (!result.success) {
-          tasksDb.delete(task.id);
-          return res.status(500).json({
-            error: `Failed to create worktree: ${result.error}`,
-          } satisfies ApiError);
-        }
-
-        task.worktree_path = result.worktreePath;
-        task.worktree_branch = result.branch;
-      }
-
-      try {
-        writeTaskDoc(projectId, task.id, description?.trim() || '');
-      } catch (fileError) {
-        console.error('Failed to create task documentation file:', fileError);
-      }
+        title,
+        description,
+        yoloMode: !!yolo_mode,
+      });
 
       res.status(201).json(task);
     } catch (error) {
       console.error('Error creating task:', error);
-      res.status(500).json({ error: 'Failed to create task' } satisfies ApiError);
+      res.status(500).json({
+        error: error instanceof TaskCreationError ? error.message : 'Failed to create task',
+      } satisfies ApiError);
     }
   },
 );
@@ -849,15 +848,18 @@ router.post(
       }
 
       const { title, body } = req.validated!.body as CreatePullRequestBody;
+      const beforeEffect = freshGitHubEffectGuard(taskWithProject.project_id, userId);
 
       const result = await createOrUpdatePR(
         taskWithProject.repo_folder_path,
         taskId,
         title,
         body || '',
+        { beforeEffect },
       );
       res.json(result);
     } catch (error) {
+      if (sendGitHubCapabilityError(res, error)) return;
       console.error('Error creating pull request:', error);
       res
         .status(500)
@@ -976,10 +978,17 @@ router.post(
 
       const { commitMessage } = req.validated!.body as PushChangesBody;
       const message = commitMessage || taskWithProject.title || `Task #${taskId}`;
+      const beforeEffect = freshGitHubEffectGuard(taskWithProject.project_id, userId);
 
-      const result = await pushChanges(taskWithProject.repo_folder_path, taskId, message);
+      const result = await pushChanges(
+        taskWithProject.repo_folder_path,
+        taskId,
+        message,
+        { beforeEffect },
+      );
       res.json(result);
     } catch (error) {
+      if (sendGitHubCapabilityError(res, error)) return;
       console.error('Error pushing changes:', error);
       res.status(500).json({ error: 'Failed to push changes' } satisfies ApiError);
     }

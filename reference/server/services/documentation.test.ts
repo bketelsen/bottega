@@ -14,6 +14,7 @@ import {
   getDevServerPort,
   ensureTmpFolder,
   saveConversationUpload,
+  updateGeneratedTaskDocSection,
   _internal
 } from './documentation.js';
 
@@ -119,6 +120,41 @@ describe('Documentation Service - Phase 2', () => {
       writeTaskDoc(testProjectId, 42, 'Task 42 content');
 
       expect(fs.existsSync(archiveTaskPath(42))).toBe(true);
+    });
+  });
+
+  describe('updateGeneratedTaskDocSection', () => {
+    it('replaces a stable generated section without duplicating it', () => {
+      writeTaskDoc(testProjectId, 1, '# Task\n\nHuman content');
+      const options = { isRunActive: () => false };
+
+      expect(updateGeneratedTaskDocSection(testProjectId, 1, 'github-feedback', 'First', options)).toBe(true);
+      expect(updateGeneratedTaskDocSection(testProjectId, 1, 'github-feedback', 'Revised', options)).toBe(true);
+
+      const result = readTaskDoc(testProjectId, 1);
+      expect(result).toContain('Human content');
+      expect(result).toContain('Revised');
+      expect(result).not.toContain('First');
+      expect(result.match(/bottega:generated:github-feedback:start/g)).toHaveLength(1);
+    });
+
+    it('refuses to read or write while an agent run is active', () => {
+      writeTaskDoc(testProjectId, 1, 'Original');
+
+      expect(updateGeneratedTaskDocSection(testProjectId, 1, 'github-feedback', 'New', {
+        isRunActive: () => true,
+      })).toBe(false);
+      expect(readTaskDoc(testProjectId, 1)).toBe('Original');
+    });
+
+    it('refuses the write if a run starts after the document read', () => {
+      writeTaskDoc(testProjectId, 1, 'Original');
+      let checks = 0;
+
+      expect(updateGeneratedTaskDocSection(testProjectId, 1, 'github-feedback', 'New', {
+        isRunActive: () => ++checks > 1,
+      })).toBe(false);
+      expect(readTaskDoc(testProjectId, 1)).toBe('Original');
     });
   });
 
