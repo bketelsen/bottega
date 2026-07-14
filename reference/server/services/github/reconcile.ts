@@ -283,8 +283,16 @@ function pullRequestHash(pr: GitHubPullRequest, bottegaLogin: string | null = nu
     .filter((comment) => isHumanComment(comment, bottegaLogin) && hasGitHubPrTriggerMention(comment.body))
     .map((comment) => comment.id)
     .sort((a, b) => a - b);
+  // Deliberately excludes headSha. Commit-scoped evidence (check runs,
+  // classic statuses) already carries fresh IDs on every commit, so it
+  // re-triggers naturally. Human-gated evidence (unresolved threads,
+  // CHANGES_REQUESTED reviews, trigger mentions) must NOT re-arm on the
+  // agent's own push — only a human can resolve it, and hashing headSha
+  // made every finalized repair commit look like new evidence, looping
+  // until the run cap. Recurrence of identical evidence after a quiet
+  // period is handled by clearing the stored hash when the PR is
+  // observed non-actionable (see reconcilePullRequestSnapshot).
   return createHash('sha256').update(JSON.stringify({
-    headSha: pr.headSha,
     failedChecks,
     failedStatuses,
     unresolvedReviewIds,
@@ -356,6 +364,23 @@ function renderPullRequestEvidence(pr: GitHubPullRequest, bottegaLogin: string |
   ].join('\n');
 }
 
+function findExistingPullRequestTask(
+  projectId: number,
+  prNumber: number,
+  pr: GitHubPullRequest,
+): ReturnType<typeof tasksDb.getByGithubPr> {
+  let task = tasksDb.getByGithubPr(projectId, prNumber);
+  const branchTaskId = /^task\/(\d+)(?:-|$)/.exec(pr.head.ref)?.[1];
+  if (!task && branchTaskId) {
+    const branchTask = tasksDb.getById(Number(branchTaskId));
+    if (branchTask?.project_id === projectId) task = branchTask;
+  }
+  if (!task && pr.linkedIssueNumber) {
+    task = tasksDb.getByGithubIssue(projectId, pr.linkedIssueNumber);
+  }
+  return task;
+}
+
 async function reconcilePullRequestSnapshot(
   project: GitHubProject,
   projectId: number,
@@ -366,17 +391,18 @@ async function reconcilePullRequestSnapshot(
     githubIdentity.resolveLogin(),
   ]);
   if (pr.state !== 'open') return 'closed';
-  if (!actionablePullRequest(pr, bottegaLogin)) return 'open';
+  if (!actionablePullRequest(pr, bottegaLogin)) {
+    // Evidence has been dealt with (checks green, threads resolved, …).
+    // Drop the stored hash so identical evidence recurring later — e.g.
+    // main moving and re-conflicting the same branch — reads as new.
+    const idleTask = findExistingPullRequestTask(projectId, prNumber, pr);
+    if (idleTask?.github_pr_evidence_hash && !hasRunningAgent(idleTask.id)) {
+      tasksDb.update(idleTask.id, { github_pr_evidence_hash: null });
+    }
+    return 'open';
+  }
 
-  let task = tasksDb.getByGithubPr(projectId, prNumber);
-  const branchTaskId = /^task\/(\d+)(?:-|$)/.exec(pr.head.ref)?.[1];
-  if (!task && branchTaskId) {
-    const branchTask = tasksDb.getById(Number(branchTaskId));
-    if (branchTask?.project_id === projectId) task = branchTask;
-  }
-  if (!task && pr.linkedIssueNumber) {
-    task = tasksDb.getByGithubIssue(projectId, pr.linkedIssueNumber);
-  }
+  let task = findExistingPullRequestTask(projectId, prNumber, pr);
   if (!task) {
     const headRepo = pr.head.repo?.full_name;
     if (!headRepo || normalizeGitHubRepo(headRepo) !== normalizeGitHubRepo(project.github_repo!)) {

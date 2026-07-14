@@ -436,6 +436,33 @@ describe('PR reconciliation', () => {
     } as never));
   });
 
+  it('does not re-arm standing human feedback when only the head commit changes', () => {
+    const standingFeedback = {
+      ...pr,
+      checks: [],
+      reviewComments: [{ ...comment, id: 20, isResolved: false }],
+    };
+    expect(_internal.pullRequestHash(standingFeedback as never)).toBe(_internal.pullRequestHash({
+      ...standingFeedback,
+      headSha: 'def',
+      head: { ...standingFeedback.head, sha: 'def' },
+    } as never));
+  });
+
+  it('clears the stored evidence hash when the PR is observed non-actionable', async () => {
+    vi.mocked(githubClient.getPullRequest).mockResolvedValue({ ...pr, checks: [] } as never);
+    vi.mocked(tasksDb.getByGithubPr).mockReturnValue({
+      ...task,
+      github_pr_number: 44,
+      github_pr_evidence_hash: 'stale-hash',
+    } as never);
+
+    await reconcilePullRequest(1, 44);
+
+    expect(tasksDb.update).toHaveBeenCalledWith(7, { github_pr_evidence_hash: null });
+    expect(startAgentRun).not.toHaveBeenCalled();
+  });
+
   it('starts one PR agent and persists evidence only after startup', async () => {
     vi.mocked(githubClient.getPullRequest).mockResolvedValue(pr as never);
     vi.mocked(tasksDb.getByGithubPr).mockReturnValue({ ...task, github_pr_number: 44 } as never);
