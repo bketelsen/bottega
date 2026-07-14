@@ -84,7 +84,10 @@ function makeDeps() {
     XDG_CONFIG_HOME: `/tmp/fake/${userId}/config`,
     XDG_STATE_HOME: `/tmp/fake/${userId}/state`,
     XDG_CACHE_HOME: `/tmp/fake/${userId}/cache`,
-    GH_CONFIG_DIR: '/tmp/fake-host-gh',
+    GH_CONFIG_DIR: `/tmp/fake/${userId}/config/gh`,
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_SYSTEM: '/dev/null',
+    GIT_TERMINAL_PROMPT: '0',
     OPENCODE_CONFIG: '/dev/null',
   })) as unknown as (userId: number) => NodeJS.ProcessEnv;
 
@@ -182,7 +185,10 @@ describe('openCodeServerPool', () => {
     const rec = ctx.spawnRecords[0]!;
     expect(rec.env['XDG_DATA_HOME']).toBe('/tmp/fake/42/data');
     expect(rec.env['XDG_CONFIG_HOME']).toBe('/tmp/fake/42/config');
-    expect(rec.env['GH_CONFIG_DIR']).toBe('/tmp/fake-host-gh');
+    expect(rec.env['GH_CONFIG_DIR']).toBe('/tmp/fake/42/config/gh');
+    expect(rec.env['GIT_CONFIG_GLOBAL']).toBe('/dev/null');
+    expect(rec.env['GIT_CONFIG_SYSTEM']).toBe('/dev/null');
+    expect(rec.env['GIT_TERMINAL_PROMPT']).toBe('0');
     expect(rec.env['OPENCODE_CONFIG']).toBe('/dev/null');
   });
 

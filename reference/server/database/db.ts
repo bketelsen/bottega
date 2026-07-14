@@ -13,6 +13,7 @@ import type {
   ProjectMemberRow,
   ProjectRow,
   Provider,
+  GitHubFinalizeStatus,
   TaskRow,
   TaskStatus,
   UserRow,
@@ -20,7 +21,11 @@ import type {
 } from '../../shared/types/db.js';
 import { DEFAULT_AGENT_MODEL_SETTINGS } from '../../shared/types/agentModelSettings.js';
 import { normalizeGitHubRepository } from '../../shared/schemas/github.js';
-import { enforceGitHubIdentityConstraints } from './githubMigrations.js';
+import {
+  enforceGitHubIdentityConstraints,
+  migrateGitHubAppProjectIdentity,
+  migrateGitHubFinalizationRuns,
+} from './githubMigrations.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -479,6 +484,8 @@ const runMigrations = (): void => {
       );
     }
 
+    migrateGitHubAppProjectIdentity(db);
+
     if (!projectColumnNames.includes('autonomy_tier')) {
       console.log('Running migration: Adding autonomy_tier column to projects');
       db.exec(
@@ -585,6 +592,7 @@ const runMigrations = (): void => {
 
     // Legacy tables only gain these columns above, and task_agent_runs may be
     // rebuilt by earlier migrations, so identity and running indexes come last.
+    migrateGitHubFinalizationRuns(db);
     enforceGitHubIdentityConstraints(db);
 
     console.log('Database migrations completed successfully');
@@ -1032,6 +1040,21 @@ const projectsDb = {
     return db
       .prepare('SELECT * FROM projects WHERE github_repo = ? COLLATE NOCASE')
       .get(normalizeGitHubRepository(githubRepo)) as ProjectRow | undefined;
+  },
+
+  updateGitHubIdentity: (
+    id: number,
+    repository: string,
+    repositoryId: number,
+    installationId: number,
+  ): ProjectRow | undefined => {
+    db.prepare(
+      `UPDATE projects
+       SET github_repo = ?, github_repository_id = ?, github_installation_id = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    ).run(normalizeGitHubRepository(repository), repositoryId, installationId, id);
+    return projectsDb.getByIdAdmin(id);
   },
 
   getGithubAutomationEnabled: (): ProjectRow[] => {
@@ -1482,6 +1505,10 @@ const agentRunsDb = {
       status: 'running',
       conversation_id: conversationId,
       provider,
+      github_finalize_status: 'none',
+      github_finalize_head_sha: null,
+      github_finalize_error: null,
+      github_finalize_started_at: null,
       created_at: new Date().toISOString(),
       completed_at: null,
     };
@@ -1508,10 +1535,145 @@ const agentRunsDb = {
       .prepare(
         `SELECT * FROM task_agent_runs
          WHERE task_id = ? AND agent_type = ?
-         ORDER BY created_at DESC
+         ORDER BY created_at DESC, id DESC
          LIMIT 1`
       )
       .get(taskId, agentType) as AgentRunRow | undefined;
+  },
+
+  getLatestPrRun: (taskId: number): AgentRunRow | undefined => {
+    return db
+      .prepare(
+        `SELECT * FROM task_agent_runs
+         WHERE task_id = ? AND agent_type = 'pr'
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`,
+      )
+      .get(taskId) as AgentRunRow | undefined;
+  },
+
+  getRecoverableGitHubFinalizations: (
+    projectId: number,
+    staleBefore: Date,
+    limit = 50,
+  ): AgentRunRow[] => {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error('GitHub finalization recovery limit must be between 1 and 100');
+    }
+    return db.prepare(
+      `SELECT runs.*
+       FROM task_agent_runs runs
+       JOIN tasks ON tasks.id = runs.task_id
+       WHERE tasks.project_id = ?
+         AND runs.agent_type = 'pr'
+         AND runs.status = 'completed'
+         AND (
+           runs.github_finalize_status IN ('ready', 'failed')
+           OR (
+             runs.github_finalize_status = 'finalizing'
+             AND (runs.github_finalize_started_at IS NULL
+                  OR julianday(runs.github_finalize_started_at) <= julianday(?))
+           )
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM task_agent_runs newer
+           WHERE newer.task_id = runs.task_id AND newer.agent_type = 'pr'
+             AND (newer.created_at > runs.created_at
+                  OR (newer.created_at = runs.created_at AND newer.id > runs.id))
+         )
+       ORDER BY COALESCE(runs.completed_at, runs.created_at) ASC, runs.id ASC
+       LIMIT ?`,
+    ).all(projectId, staleBefore.toISOString(), limit) as AgentRunRow[];
+  },
+
+  markLatestRunningPrReady: (taskId: number): AgentRunRow | undefined => {
+    const markReady = db.transaction((): AgentRunRow | undefined => {
+      const run = db
+        .prepare(
+          `SELECT * FROM task_agent_runs
+           WHERE task_id = ? AND agent_type = 'pr' AND status = 'running'
+           ORDER BY created_at DESC, id DESC
+           LIMIT 1`,
+        )
+        .get(taskId) as AgentRunRow | undefined;
+      if (!run) return undefined;
+
+      if (run.github_finalize_status === 'none' || run.github_finalize_status === 'failed') {
+        db.prepare(
+          `UPDATE task_agent_runs
+           SET github_finalize_status = 'ready',
+               github_finalize_head_sha = NULL,
+               github_finalize_error = NULL,
+               github_finalize_started_at = NULL
+           WHERE id = ? AND status = 'running'
+             AND github_finalize_status IN ('none', 'failed')`,
+        ).run(run.id);
+      }
+      return agentRunsDb.getById(run.id);
+    });
+    return markReady.immediate();
+  },
+
+  claimGitHubFinalization: (id: number): AgentRunRow | undefined => {
+    const result = db.prepare(
+      `UPDATE task_agent_runs
+       SET github_finalize_status = 'finalizing',
+           github_finalize_error = NULL,
+           github_finalize_started_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND agent_type = 'pr'
+         AND github_finalize_status IN ('ready', 'failed')`,
+    ).run(id);
+    return result.changes === 1 ? agentRunsDb.getById(id) : undefined;
+  },
+
+  reclaimStaleGitHubFinalization: (
+    id: number,
+    leaseTimeoutMs: number,
+    now: Date = new Date(),
+  ): AgentRunRow | undefined => {
+    if (!Number.isFinite(leaseTimeoutMs) || leaseTimeoutMs < 0) {
+      throw new Error('GitHub finalization lease timeout must be a non-negative number');
+    }
+    const cutoff = new Date(now.getTime() - leaseTimeoutMs).toISOString();
+    const result = db.prepare(
+      `UPDATE task_agent_runs
+       SET github_finalize_error = NULL,
+           github_finalize_started_at = ?
+       WHERE id = ? AND agent_type = 'pr' AND github_finalize_status = 'finalizing'
+         AND (github_finalize_started_at IS NULL
+              OR julianday(github_finalize_started_at) <= julianday(?))`,
+    ).run(now.toISOString(), id, cutoff);
+    return result.changes === 1 ? agentRunsDb.getById(id) : undefined;
+  },
+
+  recordGitHubFinalized: (id: number, headSha: string): AgentRunRow | undefined => {
+    if (!headSha.trim()) throw new Error('GitHub finalization head SHA is required');
+    const result = db.prepare(
+      `UPDATE task_agent_runs
+       SET github_finalize_status = 'finalized',
+           github_finalize_head_sha = ?,
+           github_finalize_error = NULL,
+           github_finalize_started_at = NULL
+       WHERE id = ? AND agent_type = 'pr' AND github_finalize_status = 'finalizing'`,
+    ).run(headSha, id);
+    return result.changes === 1 ? agentRunsDb.getById(id) : undefined;
+  },
+
+  recordGitHubFinalizeFailure: (id: number, error: unknown): AgentRunRow | undefined => {
+    const raw = error instanceof Error ? error.message : String(error);
+    const redacted = raw
+      .replace(/\b(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]+\b/g, '[REDACTED]')
+      .replace(/\b(Bearer\s+)[^\s,;]+/gi, '$1[REDACTED]')
+      .replace(/\b(token|password|secret|api[_-]?key)(\s*[=:]\s*)([^\s,;]+)/gi, '$1$2[REDACTED]')
+      .slice(0, 2000);
+    const result = db.prepare(
+      `UPDATE task_agent_runs
+       SET github_finalize_status = 'failed',
+           github_finalize_error = ?,
+           github_finalize_started_at = NULL
+       WHERE id = ? AND agent_type = 'pr' AND github_finalize_status = 'finalizing'`,
+    ).run(redacted, id);
+    return result.changes === 1 ? agentRunsDb.getById(id) : undefined;
   },
 
   getByStatus: (status: AgentRunStatus): AgentRunRow[] => {
@@ -1678,6 +1840,7 @@ export type {
   AgentRunRow,
   AgentType,
   AgentRunStatus,
+  GitHubFinalizeStatus,
   AutonomyTier,
   AppSettingRow,
   UserAgentModelSettingsRow,

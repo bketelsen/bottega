@@ -107,6 +107,7 @@ import type {
   AddProjectMemberRequest,
   AddProjectMemberResponse,
   RemoveProjectMemberResponse,
+  GitHubAppHealthResponse,
 } from '../../shared/api/admin';
 import type {
   ListPromptsResponse,
@@ -669,6 +670,8 @@ export const api = {
 
   // Admin endpoints (requires admin privileges)
   admin: {
+    getGitHubAppHealth: (): TypedFetch<GitHubAppHealthResponse> =>
+      authenticatedFetch<GitHubAppHealthResponse>('/api/admin/github-app/health'),
     // User management
     listUsers: (): TypedFetch<ListAdminUsersResponse> =>
       authenticatedFetch<ListAdminUsersResponse>('/api/admin/users'),

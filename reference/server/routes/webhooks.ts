@@ -1,51 +1,81 @@
 import express, { type Request, type Response } from 'express';
 import {
-  isSupportedGitHubEvent,
   queueGitHubWebhook,
   validateGitHubWebhookSignature,
 } from '../services/webhookService.js';
-import { GitHubWebhookEnvelopeSchema } from '../../shared/schemas/webhooks.js';
+import {
+  GitHubDeliveryHeaderSchema,
+  GitHubEventHeaderSchema,
+  GitHubSignatureHeaderSchema,
+  isSupportedGitHubEvent,
+  parseGitHubWebhookDelivery,
+} from '../../shared/schemas/webhooks.js';
 
 const router = express.Router();
 
 router.post('/github', (req: Request, res: Response<unknown>) => {
-  const signature = req.headers['x-hub-signature-256'] as string | undefined;
+  const signatureResult = GitHubSignatureHeaderSchema.safeParse(req.headers['x-hub-signature-256']);
   if (
-    !validateGitHubWebhookSignature(
-      req.body as Buffer,
-      signature,
+    !signatureResult.success
+    || !Buffer.isBuffer(req.body)
+    || !validateGitHubWebhookSignature(
+      req.body,
+      signatureResult.data,
       process.env.GITHUB_WEBHOOK_SECRET,
     )
   ) {
     return res.status(401).json({ error: 'Invalid signature' });
   }
 
+  const deliveryResult = GitHubDeliveryHeaderSchema.safeParse(req.headers['x-github-delivery']);
+  if (!deliveryResult.success) {
+    return res.status(400).json({
+      error: 'Invalid GitHub delivery header',
+      code: 'GITHUB_DELIVERY_INVALID',
+    });
+  }
+
+  const eventResult = GitHubEventHeaderSchema.safeParse(req.headers['x-github-event']);
+  if (!eventResult.success) {
+    return res.status(400).json({ error: 'Invalid GitHub event header', code: 'GITHUB_EVENT_INVALID' });
+  }
+  const event = eventResult.data;
+  if (!isSupportedGitHubEvent(event)) {
+    return res.status(200).json({ status: 'ignored', event });
+  }
+
   let parsedJson: unknown;
   try {
-    parsedJson = JSON.parse((req.body as Buffer).toString('utf8')) as unknown;
+    parsedJson = JSON.parse(req.body.toString('utf8')) as unknown;
   } catch {
     return res.status(400).json({ error: 'Invalid JSON payload' });
   }
 
-  const parsedPayload = GitHubWebhookEnvelopeSchema.safeParse(parsedJson);
-  if (!parsedPayload.success) {
-    return res.status(400).json({ error: 'Invalid webhook payload', issues: parsedPayload.error.issues });
+  const parsedDelivery = parseGitHubWebhookDelivery(
+    event,
+    parsedJson,
+    process.env.GITHUB_AUTH_MODE?.trim() === 'app',
+  );
+  if (!parsedDelivery.success) {
+    return res.status(400).json({ error: 'Invalid webhook payload', issues: parsedDelivery.error.issues });
   }
-  const payload = parsedPayload.data;
+  const delivery = parsedDelivery.data;
 
-  const event = req.headers['x-github-event'] as string | undefined;
-  if (!event || !isSupportedGitHubEvent(event)) {
-    return res.status(200).json({ status: 'ignored', event });
-  }
+  const repository = delivery.event === 'installation_repositories'
+    ? undefined
+    : delivery.payload.repository?.full_name;
 
-  const repository = payload.repository.full_name;
-
-  if (!queueGitHubWebhook(event, payload)) {
+  if (!queueGitHubWebhook(delivery)) {
     return res.status(503).json({ error: 'Webhook service is shutting down' });
   }
 
   // Reconciliation starts on the next event-loop turn so acceptance remains immediate.
-  res.status(202).json({ status: 'accepted', event, repository });
+  res.status(202).json({
+    status: 'accepted',
+    event,
+    delivery: deliveryResult.data,
+    ...(repository ? { repository } : {}),
+  });
 });
 
 router.get('/health', (_req: Request, res: Response<unknown>) => {

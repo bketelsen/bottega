@@ -42,6 +42,75 @@ describe('normalizeGitHubRepo', () => {
 });
 
 describe('GitHubClient reads', () => {
+  it('isolates App tokens and gh configuration per repository command', async () => {
+    const runner = vi.fn().mockResolvedValue(ok({ number: 4, labels: [], html_url: 'https://example/4' }));
+    const resolveRepositoryAuth = vi.fn().mockResolvedValue({
+      token: 'installation-secret',
+      expiresAt: Date.now() + 60_000,
+      installationId: 10,
+      repositoryId: 100,
+      repository: 'owner/repo',
+      botLogin: 'bottega[bot]',
+      botUserId: 99,
+      botEmail: '99+bottega[bot]@users.noreply.github.com',
+    });
+    const client = new GitHubClient({
+      runner,
+      authMode: () => 'app',
+      resolveRepositoryAuth,
+      ghConfigDir: '/tmp/bottega-test-gh',
+    });
+
+    await client.getIssue(project(), 4);
+
+    expect(resolveRepositoryAuth).toHaveBeenCalledWith(1, 'read');
+    expect(runner).toHaveBeenCalledWith('gh', expect.any(Array), {
+      env: {
+        GH_TOKEN: 'installation-secret',
+        GH_CONFIG_DIR: '/tmp/bottega-test-gh',
+      },
+    });
+  });
+
+  it('keys App rate-limit circuits by installation and repository', async () => {
+    const failure = Object.assign(new Error('failed'), { stderr: 'HTTP 403 rate limit exceeded' });
+    const runner = vi.fn()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce(ok({ number: 2, labels: [], html_url: 'https://example/2' }));
+    const resolveRepositoryAuth = vi.fn(async (projectId: number) => ({
+      token: `token-${projectId}`,
+      expiresAt: Date.now() + 60_000,
+      installationId: projectId * 10,
+      repositoryId: projectId * 100,
+      repository: projectId === 1 ? 'owner/repo' : 'other/repo',
+      botLogin: 'bottega[bot]',
+      botUserId: 99,
+      botEmail: '99+bottega[bot]@users.noreply.github.com',
+    }));
+    const client = new GitHubClient({
+      runner,
+      authMode: () => 'app',
+      resolveRepositoryAuth,
+      ghConfigDir: '/tmp/bottega-test-gh',
+    });
+
+    await expect(client.getIssue(project(), 1)).rejects.toMatchObject({ kind: 'rate_limited' });
+    await expect(client.getIssue({ ...project(), id: 2, github_repo: 'other/repo' }, 2)).resolves.toMatchObject({ number: 2 });
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves host commands and rejects /user in App mode', async () => {
+    const hostRunner = vi.fn().mockResolvedValue(ok({ login: 'host-user', id: 1, type: 'User' }));
+    await expect(new GitHubClient({ runner: hostRunner, authMode: () => 'host' }).getSelf())
+      .resolves.toMatchObject({ login: 'host-user' });
+    expect(hostRunner).toHaveBeenCalledWith('gh', expect.any(Array));
+
+    const appRunner = vi.fn();
+    await expect(new GitHubClient({ runner: appRunner, authMode: () => 'app' }).getSelf())
+      .rejects.toMatchObject({ details: { endpoint: 'user' } });
+    expect(appRunner).not.toHaveBeenCalled();
+  });
+
   it('uses argv-safe gh api arguments and encodes label queries', async () => {
     const runner = vi.fn().mockResolvedValue(ok([{ number: 2, labels: [], html_url: 'https://example/2' }]));
     const client = new GitHubClient({ runner });
@@ -78,15 +147,15 @@ describe('GitHubClient reads', () => {
     let resolve!: (result: ReturnType<typeof ok>) => void;
     const runner = vi.fn().mockReturnValue(new Promise((done) => { resolve = done; }));
     const client = new GitHubClient({ runner });
-    const first = client.getIssue('owner/repo', 4);
-    const second = client.getIssue('owner/repo', 4);
+    const first = client.getIssue(project(), 4);
+    const second = client.getIssue(project(), 4);
     expect(runner).toHaveBeenCalledTimes(1);
     resolve(ok({ number: 4, labels: [], html_url: 'https://example/4' }));
     await expect(Promise.all([first, second])).resolves.toEqual([
       expect.objectContaining({ number: 4 }),
       expect.objectContaining({ number: 4 }),
     ]);
-    await client.getIssue('owner/repo', 4);
+    await client.getIssue(project(), 4);
     expect(runner).toHaveBeenCalledTimes(2);
   });
 
@@ -112,7 +181,7 @@ describe('GitHubClient reads', () => {
       kind: 'rate_limited',
       details: { rateLimitResetAt: 200_000, retryable: false },
     });
-    await expect(client.getIssue('owner/repo', 1)).rejects.toMatchObject({ kind: 'rate_limited' });
+    await expect(client.getIssue(project(), 1)).rejects.toMatchObject({ kind: 'rate_limited' });
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
@@ -157,7 +226,7 @@ describe('GitHubClient reads', () => {
     });
     const client = new GitHubClient({ runner });
 
-    await expect(client.getReviewEvidence('owner/repo', 4)).resolves.toMatchObject({
+    await expect(client.getReviewEvidence(project(), 4)).resolves.toMatchObject({
       comments: [{ id: 91, isResolved: true }],
     });
     expect(runner).toHaveBeenCalledWith('gh', expect.arrayContaining([
@@ -191,7 +260,7 @@ describe('GitHubClient reads', () => {
     });
     const wait = vi.fn().mockResolvedValue(undefined);
 
-    await new GitHubClient({ runner, sleep: wait, baseBackoffMs: 10 }).getPullRequest('owner/repo', 4);
+    await new GitHubClient({ runner, sleep: wait, baseBackoffMs: 10 }).getPullRequest(project(), 4);
 
     expect(graphqlAttempts).toBe(2);
     expect(wait).toHaveBeenCalledWith(10);
@@ -225,7 +294,7 @@ describe('GitHubClient reads', () => {
       return ok([[]]);
     });
 
-    await expect(new GitHubClient({ runner }).getPullRequest('owner/repo', 4)).resolves.toMatchObject({
+    await expect(new GitHubClient({ runner }).getPullRequest(project(), 4)).resolves.toMatchObject({
       reviews: [review],
     });
   });
@@ -242,7 +311,7 @@ describe('GitHubClient reads', () => {
       base: { ref: 'main', sha: 'def', label: 'owner:main' },
     }));
 
-    await expect(new GitHubClient({ runner }).getPullRequest('owner/repo', 4)).resolves.toMatchObject({
+    await expect(new GitHubClient({ runner }).getPullRequest(project(), 4)).resolves.toMatchObject({
       state: 'closed',
       checks: [],
       reviews: [],

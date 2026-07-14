@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS projects (
     name TEXT NOT NULL,
     repo_folder_path TEXT UNIQUE NOT NULL,
     github_repo TEXT,
+    github_repository_id INTEGER,
+    github_installation_id INTEGER,
     github_automation_enabled INTEGER NOT NULL DEFAULT 0 CHECK (github_automation_enabled IN (0, 1)),
     autonomy_tier TEXT NOT NULL DEFAULT 'advisory' CHECK (autonomy_tier IN ('advisory', 'issues', 'pr', 'automerge')),
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -132,6 +134,11 @@ CREATE TABLE IF NOT EXISTS task_agent_runs (
     -- Provider used for this run; diagnostics only — runtime always reads
     -- the provider off the linked conversation row.
     provider TEXT NOT NULL DEFAULT 'anthropic',
+    github_finalize_status TEXT NOT NULL DEFAULT 'none'
+        CHECK(github_finalize_status IN ('none', 'ready', 'finalizing', 'finalized', 'failed')),
+    github_finalize_head_sha TEXT,
+    github_finalize_error TEXT,
+    github_finalize_started_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     completed_at DATETIME,
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,

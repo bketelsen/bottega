@@ -8,7 +8,8 @@ vi.mock('../database/db.js', () => ({
     create: vi.fn(),
     getById: vi.fn(),
     update: vi.fn(),
-    delete: vi.fn()
+    delete: vi.fn(),
+    updateGitHubIdentity: vi.fn(),
   },
   userDb: {
     getUserById: vi.fn(),
@@ -22,6 +23,11 @@ vi.mock('../services/agentModelSettings.js', () => ({
 
 vi.mock('../services/credentials/registry.js', () => ({
   getCredentialStore: vi.fn(),
+}));
+
+vi.mock('../services/github/appAuth.js', () => ({
+  getGitHubAppHealth: vi.fn(),
+  resolveRepositoryInstallation: vi.fn(),
 }));
 
 // Mock the projectService
@@ -53,6 +59,7 @@ import { getAllProjects, getProject, updateProject, deleteProject } from '../ser
 import { saveConversationUpload } from '../services/documentation.js';
 import { loadAgentModelSettings } from '../services/agentModelSettings.js';
 import { getCredentialStore } from '../services/credentials/registry.js';
+import { getGitHubAppHealth, resolveRepositoryInstallation } from '../services/github/appAuth.js';
 
 describe('Projects Routes - Phase 3', () => {
   let app: import("express").Application;
@@ -63,6 +70,7 @@ describe('Projects Routes - Phase 3', () => {
     // Reset all mocks
     vi.clearAllMocks();
     isAdmin = 0;
+    delete process.env.GITHUB_AUTH_MODE;
 
     // Create Express app with mocked auth
     app = express();
@@ -314,6 +322,79 @@ describe('Projects Routes - Phase 3', () => {
         github_repo: 'owner/repo',
         github_automation_enabled: 1,
       });
+    });
+
+    it('verifies and persists canonical GitHub App identity when enabling automation', async () => {
+      isAdmin = 1;
+      process.env.GITHUB_AUTH_MODE = 'app';
+      const project = {
+        id: 1,
+        user_id: testUserId,
+        github_repo: 'owner/repo',
+        github_automation_enabled: 0,
+        autonomy_tier: 'pr',
+      };
+      vi.mocked(getProject).mockReturnValue(project as never);
+      vi.mocked(userDb.getUserById).mockReturnValue({ id: testUserId } as never);
+      vi.mocked(loadAgentModelSettings).mockReturnValue({
+        planification: { provider: 'anthropic' },
+      } as never);
+      vi.mocked(getCredentialStore).mockReturnValue({
+        getStatus: vi.fn().mockResolvedValue({ authenticated: true }),
+      } as never);
+      vi.mocked(getGitHubAppHealth).mockResolvedValue({
+        configured: true,
+        status: 'healthy',
+      } as never);
+      vi.mocked(resolveRepositoryInstallation).mockResolvedValue({
+        canonicalFullName: 'canonical/repo',
+        repositoryId: 100,
+        installationId: 10,
+      });
+      vi.mocked(updateProject).mockReturnValue({ ...project, github_automation_enabled: 1 } as never);
+      vi.mocked(projectsDb.updateGitHubIdentity).mockReturnValue({
+        ...project,
+        github_repo: 'canonical/repo',
+        github_repository_id: 100,
+        github_installation_id: 10,
+        github_automation_enabled: 1,
+      } as never);
+
+      const response = await request(app)
+        .put('/api/projects/1')
+        .send({ githubAutomationEnabled: true });
+
+      expect(response.status).toBe(200);
+      expect(resolveRepositoryInstallation).toHaveBeenCalledWith('owner/repo');
+      expect(projectsDb.updateGitHubIdentity).toHaveBeenCalledWith(1, 'canonical/repo', 100, 10);
+      expect(userDb.getGitConfig).not.toHaveBeenCalled();
+      expect(response.body.github_repository_id).toBe(100);
+    });
+
+    it('returns a stable GitHub App health error code', async () => {
+      isAdmin = 1;
+      process.env.GITHUB_AUTH_MODE = 'app';
+      vi.mocked(getProject).mockReturnValue({
+        id: 1,
+        user_id: testUserId,
+        github_repo: 'owner/repo',
+        github_automation_enabled: 0,
+        autonomy_tier: 'advisory',
+      } as never);
+      vi.mocked(userDb.getUserById).mockReturnValue({ id: testUserId } as never);
+      vi.mocked(loadAgentModelSettings).mockReturnValue({} as never);
+      vi.mocked(getGitHubAppHealth).mockResolvedValue({
+        configured: true,
+        status: 'error',
+        error: 'App metadata failed',
+        errorCode: 'GITHUB_APP_TOKEN_FAILED',
+      } as never);
+
+      const response = await request(app)
+        .put('/api/projects/1')
+        .send({ githubAutomationEnabled: true });
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('GITHUB_APP_TOKEN_FAILED');
     });
 
     it('refuses to enable automation when owner credentials are missing', async () => {

@@ -1,13 +1,25 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Use vi.hoisted so `vi.mock` can reach the mock function before module init.
-const { mockRunCommand, mockAccess, mockMkdir, mockSymlink, mockExistsSync } = vi.hoisted(
+const {
+  mockRunCommand,
+  mockAccess,
+  mockMkdir,
+  mockSymlink,
+  mockExistsSync,
+  mockResolveAuth,
+  mockRunRemoteGit,
+  mockRunGitHubCli,
+} = vi.hoisted(
   () => ({
     mockRunCommand: vi.fn(),
     mockAccess: vi.fn(),
     mockMkdir: vi.fn(),
     mockSymlink: vi.fn(),
     mockExistsSync: vi.fn(),
+    mockResolveAuth: vi.fn(),
+    mockRunRemoteGit: vi.fn(),
+    mockRunGitHubCli: vi.fn(),
   }),
 );
 
@@ -17,6 +29,12 @@ const { mockRunCommand, mockAccess, mockMkdir, mockSymlink, mockExistsSync } = v
 // elements, never interpreted by a shell.
 vi.mock('./shell.js', () => ({
   runCommand: mockRunCommand,
+}));
+
+vi.mock('./github/gitAuth.js', () => ({
+  resolveTrustedGitHubAuth: mockResolveAuth,
+  runRemoteGit: mockRunRemoteGit,
+  runGitHubCli: mockRunGitHubCli,
 }));
 
 // Mock fs
@@ -71,6 +89,13 @@ function withDispatch(handler: RunHandler): void {
 describe('Worktree Service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockResolveAuth.mockResolvedValue(null);
+    mockRunRemoteGit.mockImplementation(
+      (repoPath: string, args: readonly string[]) => mockRunCommand('git', args, { cwd: repoPath }),
+    );
+    mockRunGitHubCli.mockImplementation(
+      (repoPath: string, args: readonly string[]) => mockRunCommand('gh', args, { cwd: repoPath }),
+    );
   });
 
   describe('getWorktreePath', () => {
@@ -260,6 +285,39 @@ describe('Worktree Service', () => {
         'worktree', 'add', '--track', '-b', 'feature/original-pr',
         '/repo-worktrees/task-15', 'origin/feature/original-pr',
       ], { cwd: '/repo' });
+    });
+
+    it('resolves project auth before fetching and sets verified worktree-local bot identity', async () => {
+      const resolvedAuth = {
+        token: 'secret', expiresAt: 1, installationId: 2, repositoryId: 3,
+        repository: 'owner/repo', botLogin: 'bot[bot]', botUserId: 4,
+        botEmail: '4+bot[bot]@users.noreply.github.com',
+      };
+      mockResolveAuth.mockResolvedValue(resolvedAuth);
+      withDispatch(async (_cmd, args) => {
+        if (args.includes('symbolic-ref')) return { stdout: 'main\n', stderr: '' };
+        if (args.includes('--get') && args.includes('user.name')) return { stdout: 'bot[bot]\n', stderr: '' };
+        if (args.includes('--get') && args.includes('user.email')) {
+          return { stdout: '4+bot[bot]@users.noreply.github.com\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await createWorktree('/repo', 1, 'Test', null, { projectId: 9 });
+
+      expect(result.success).toBe(true);
+      expect(mockResolveAuth).toHaveBeenCalledWith('/repo', { projectId: 9 }, 'read');
+      expect(mockRunRemoteGit).toHaveBeenCalledWith(
+        '/repo', ['fetch', 'origin', 'main'], { auth: resolvedAuth }, 'read',
+      );
+      expect(mockRunCommand).toHaveBeenCalledWith(
+        'git', ['config', '--worktree', 'user.name', 'bot[bot]'],
+        { cwd: '/repo-worktrees/task-1' },
+      );
+      expect(mockRunCommand).toHaveBeenCalledWith(
+        'git', ['config', '--worktree', 'user.email', resolvedAuth.botEmail],
+        { cwd: '/repo-worktrees/task-1' },
+      );
     });
 
     it('rejects an invalid existing branch before invoking git', async () => {
@@ -645,6 +703,12 @@ describe('Worktree Service', () => {
       expect(result.url).toBe('https://github.com/user/repo/pull/123');
       expect(result.state).toBe('OPEN');
       expect(result.mergeable).toBe('MERGEABLE');
+      expect(mockRunGitHubCli).toHaveBeenCalledWith(
+        '/repo-worktrees/task-10',
+        expect.arrayContaining(['pr', 'view']),
+        {},
+        'read',
+      );
     });
 
     it('returns exists:false when no PR', async () => {
@@ -828,6 +892,59 @@ describe('Worktree Service', () => {
         (c) => c[0] === 'git' && (c[1] as string[])[0] === 'push',
       );
       expect(pushCall![1]).toEqual(['push', 'origin', 'task/1-test']);
+    });
+
+    it('supports an exact force-with-lease expected SHA', async () => {
+      withDispatch(async (_cmd, args) => {
+        if (args.includes('--porcelain')) return { stdout: '', stderr: '' };
+        if (args.includes('--show-current')) return { stdout: 'task/1-test\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+      const sha = 'a'.repeat(40);
+
+      const result = await pushChanges('/repo', 1, 'commit msg', {
+        projectId: 9,
+        forceWithLeaseExpectedSha: sha,
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockRunRemoteGit).toHaveBeenCalledWith('/repo-worktrees/task-1', [
+        'push', `--force-with-lease=refs/heads/task/1-test:${sha}`,
+        'origin', 'task/1-test',
+      ], expect.objectContaining({ projectId: 9 }), 'push');
+    });
+
+    it('configures and verifies the App bot identity before committing', async () => {
+      const resolvedAuth = {
+        token: 'secret', expiresAt: 1, installationId: 2, repositoryId: 3,
+        repository: 'owner/repo', botLogin: 'bot[bot]', botUserId: 4,
+        botEmail: '4+bot[bot]@users.noreply.github.com',
+      };
+      mockResolveAuth.mockResolvedValue(resolvedAuth);
+      withDispatch(async (_cmd, args) => {
+        if (args.includes('--porcelain')) return { stdout: ' M file.ts\n', stderr: '' };
+        if (args.includes('--show-current')) return { stdout: 'task/1-test\n', stderr: '' };
+        if (args.includes('--get') && args.includes('user.name')) return { stdout: `${resolvedAuth.botLogin}\n`, stderr: '' };
+        if (args.includes('--get') && args.includes('user.email')) return { stdout: `${resolvedAuth.botEmail}\n`, stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(pushChanges('/repo', 1, 'commit msg', { projectId: 9 })).resolves.toMatchObject({ success: true });
+
+      const nameConfig = mockRunCommand.mock.invocationCallOrder.findIndex((_, index) => (
+        mockRunCommand.mock.calls[index]?.[1] as string[]
+      ).includes('user.name'));
+      const commit = mockRunCommand.mock.invocationCallOrder.findIndex((_, index) => (
+        mockRunCommand.mock.calls[index]?.[1] as string[]
+      )[0] === 'commit');
+      expect(nameConfig).toBeGreaterThanOrEqual(0);
+      expect(nameConfig).toBeLessThan(commit);
+      expect(mockRunRemoteGit).toHaveBeenCalledWith(
+        '/repo-worktrees/task-1',
+        ['push', 'origin', 'task/1-test'],
+        expect.objectContaining({ projectId: 9, auth: resolvedAuth }),
+        'push',
+      );
     });
   });
 });

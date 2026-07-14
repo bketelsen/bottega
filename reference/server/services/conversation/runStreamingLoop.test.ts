@@ -297,7 +297,7 @@ describe('runStreamingLoop', () => {
       { type: 'assistant', session_id: 'sess', message: { id: 'a', content: [] } }
     ]);
 
-    await runStreamingLoop({
+    const result = await runStreamingLoop({
       queryInstance: queryInstance as never,
       conversationId: 1,
       broadcastFn: broadcastFn as never,
@@ -308,6 +308,7 @@ describe('runStreamingLoop', () => {
     });
 
     expect(onResult).not.toHaveBeenCalled();
+    expect(result.outcome).toBe('error');
   });
 
   it('swallows iterator errors thrown after result and returns cleanly', async () => {
@@ -334,6 +335,7 @@ describe('runStreamingLoop', () => {
     });
 
     expect(result.claudeSessionId).toBe('sess');
+    expect(result.outcome).toBe('success');
     logSpy.mockRestore();
   });
 
@@ -395,6 +397,7 @@ describe('runStreamingLoop', () => {
       });
 
       expect(result.authError).toBe(true);
+      expect(result.outcome).toBe('error');
       // The synthetic message must NOT be broadcast — otherwise the UI flashes
       // "Failed to authenticate" before the retry recovers.
       expect(broadcastFn).not.toHaveBeenCalledWith(
@@ -434,6 +437,7 @@ describe('runStreamingLoop', () => {
       });
 
       expect(result.authError).toBe(true);
+      expect(result.outcome).toBe('error');
       // The result must NOT be broadcast or fed to the usage tracker — that
       // would record a "completed turn" for an auth failure.
       expect(broadcastFn).not.toHaveBeenCalledWith(
@@ -462,6 +466,7 @@ describe('runStreamingLoop', () => {
       });
 
       expect(result.authError).toBe(false);
+      expect(result.outcome).toBe('success');
     });
 
     it('does not flag authError for a non-auth SDKResultError', async () => {
@@ -487,6 +492,7 @@ describe('runStreamingLoop', () => {
       });
 
       expect(result.authError).toBe(false);
+      expect(result.outcome).toBe('error');
     });
   });
 });

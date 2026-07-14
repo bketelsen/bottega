@@ -38,6 +38,14 @@ vi.mock('../github/reconcile.js', () => ({
   syncTaskPullRequest: vi.fn().mockResolvedValue(42)
 }));
 
+vi.mock('../github/finalize.js', () => ({
+  finalizePrAgentRun: vi.fn().mockResolvedValue({ success: true, finalized: true })
+}));
+
+vi.mock('../prService.js', () => ({
+  ensureTaskPullRequest: vi.fn().mockResolvedValue({ success: true, url: 'https://github.com/acme/repo/pull/42' })
+}));
+
 import {
   buildAgentRunCompletionHandler,
   MAX_WORKFLOW_RUNS
@@ -47,6 +55,8 @@ import { worktreeExists } from '../worktree.js';
 import { notifyClaudeComplete } from '../notifications.js';
 import { startAgentRun, getRunningAgentForTask } from '../agentRunner.js';
 import { syncPlannedTaskToGitHub, syncTaskPullRequest } from '../github/reconcile.js';
+import { finalizePrAgentRun } from '../github/finalize.js';
+import { ensureTaskPullRequest } from '../prService.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -83,7 +93,7 @@ function ctx(overrides = {}) {
 describe('buildAgentRunCompletionHandler', () => {
   it('is a no-op when ctx has no taskId', async () => {
     const handler = buildAgentRunCompletionHandler(ctx({ taskId: undefined }));
-    await handler();
+    await handler('success');
 
     expect(agentRunsDb.getByTask).not.toHaveBeenCalled();
     expect(notifyClaudeComplete).not.toHaveBeenCalled();
@@ -96,7 +106,7 @@ describe('buildAgentRunCompletionHandler', () => {
     ] as never);
     vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, title: 'T', project_id: 1, workflow_complete: false } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
 
     expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(9, 'completed');
     expect(c.broadcastToTaskSubscribersFn).toHaveBeenCalledWith(7, {
@@ -115,11 +125,31 @@ describe('buildAgentRunCompletionHandler', () => {
     ] as never);
     vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 0 } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
 
     expect(agentRunsDb.updateStatus).not.toHaveBeenCalled();
     vi.advanceTimersByTime(2000);
     expect(startAgentRun).not.toHaveBeenCalled();
+  });
+
+  it.each(['error', 'aborted'] as const)('marks a running agent failed and does not chain on %s', async (outcome) => {
+    const c = ctx();
+    vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+      { id: 9, conversation_id: 100, agent_type: 'implementation', status: 'running' }
+    ] as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 0 } as never);
+
+    await buildAgentRunCompletionHandler(c)(outcome);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(9, 'failed');
+    expect(c.broadcastToTaskSubscribersFn).toHaveBeenCalledWith(7, {
+      type: 'agent-run-updated',
+      agentRun: { id: 9, status: 'failed', agent_type: 'implementation', conversation_id: 100 }
+    });
+    expect(startAgentRun).not.toHaveBeenCalled();
+    expect(syncPlannedTaskToGitHub).not.toHaveBeenCalled();
+    expect(syncTaskPullRequest).not.toHaveBeenCalled();
   });
 
   it('does not chain after a PR agent (terminal)', async () => {
@@ -131,7 +161,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(tasksDb.getWithProject).mockReturnValue({ repo_folder_path: '/r', user_id: 1 } as never);
     vi.mocked(worktreeExists).mockResolvedValue(true);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     vi.advanceTimersByTime(2000);
 
     // PR is not in the chain-eligible list, so the chaining branch never runs.
@@ -147,7 +177,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(tasksDb.getWithProject).mockReturnValue({ repo_folder_path: '/r', user_id: 1 } as never);
     vi.mocked(userDb.getUserById).mockReturnValue({ id: 1, is_technical: 1 } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     vi.advanceTimersByTime(2000);
 
     expect(startAgentRun).not.toHaveBeenCalled();
@@ -162,7 +192,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(tasksDb.getWithProject).mockReturnValue({ repo_folder_path: '/r', user_id: 1 } as never);
     vi.mocked(userDb.getUserById).mockReturnValue({ id: 1, is_technical: 0 } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     expect(startAgentRun).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1000);
     expect(startAgentRun).toHaveBeenCalledWith(7, 'implementation', expect.objectContaining({ userId: 1 }));
@@ -182,7 +212,7 @@ describe('buildAgentRunCompletionHandler', () => {
     } as never);
     vi.mocked(userDb.getUserById).mockReturnValue({ id: 1, is_technical: 0 } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     await vi.advanceTimersByTimeAsync(2000);
 
     expect(syncPlannedTaskToGitHub).toHaveBeenCalledWith(7);
@@ -203,23 +233,23 @@ describe('buildAgentRunCompletionHandler', () => {
     } as never);
     vi.mocked(userDb.getUserById).mockReturnValue({ id: 1, is_technical: 0 } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     await vi.advanceTimersByTimeAsync(2000);
 
     expect(syncPlannedTaskToGitHub).not.toHaveBeenCalled();
     expect(startAgentRun).not.toHaveBeenCalled();
   });
 
-  it('syncs the task PR link when a PR agent completes', async () => {
+  it('finalizes a ready PR run when its successful lifecycle completes', async () => {
     const c = ctx();
     vi.mocked(agentRunsDb.getByTask).mockReturnValue([
       { id: 9, conversation_id: 100, agent_type: 'pr', status: 'running' }
     ] as never);
     vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, project_id: 1 } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
 
-    expect(syncTaskPullRequest).toHaveBeenCalledWith(7);
+    expect(finalizePrAgentRun).toHaveBeenCalledWith(7, 9);
   });
 
   it('chains planification → implementation when the non-tech actor differs from the technical task owner', async () => {
@@ -233,7 +263,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(userDb.getUserById).mockImplementation(((id: number) =>
       id === 2 ? { id: 2, is_technical: 0 } : { id: 1, is_technical: 1 }) as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(userDb.getUserById).toHaveBeenCalledWith(2);
@@ -251,7 +281,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(userDb.getUserById).mockImplementation(((id: number) =>
       id === 2 ? { id: 2, is_technical: 1 } : { id: 1, is_technical: 0 }) as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     vi.advanceTimersByTime(2000);
 
     expect(userDb.getUserById).toHaveBeenCalledWith(2);
@@ -267,7 +297,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(tasksDb.getWithProject).mockReturnValue({ repo_folder_path: '/r', user_id: 5 } as never);
     vi.mocked(userDb.getUserById).mockReturnValue({ id: 5, is_technical: 0 } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(userDb.getUserById).toHaveBeenCalledWith(5);
@@ -281,7 +311,7 @@ describe('buildAgentRunCompletionHandler', () => {
     ] as never);
     vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 1 } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(startAgentRun).toHaveBeenCalledWith(7, 'review', expect.any(Object));
@@ -305,7 +335,7 @@ describe('buildAgentRunCompletionHandler', () => {
       autonomy_tier: 'advisory'
     } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(startAgentRun).toHaveBeenCalledWith(7, 'review', expect.any(Object));
@@ -318,7 +348,7 @@ describe('buildAgentRunCompletionHandler', () => {
     ] as never);
     vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 2 } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(startAgentRun).toHaveBeenCalledWith(7, 'implementation', expect.any(Object));
@@ -331,7 +361,7 @@ describe('buildAgentRunCompletionHandler', () => {
     ] as never);
     vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_complete: true, refinement_complete: false } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(startAgentRun).toHaveBeenCalledWith(7, 'refinement', expect.any(Object));
@@ -356,13 +386,13 @@ describe('buildAgentRunCompletionHandler', () => {
       autonomy_tier: 'advisory'
     } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(startAgentRun).toHaveBeenCalledWith(7, 'refinement', expect.any(Object));
   });
 
-  it('marks refinement complete and chains to PR when worktree exists', async () => {
+  it('marks refinement complete and publishes the initial PR without starting a PR agent', async () => {
     const c = ctx();
     vi.mocked(agentRunsDb.getByTask).mockReturnValue([
       { id: 9, conversation_id: 100, agent_type: 'refinement', status: 'running' }
@@ -371,11 +401,12 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(tasksDb.getWithProject).mockReturnValue({ repo_folder_path: '/r', user_id: 1 } as never);
     vi.mocked(worktreeExists).mockResolvedValue(true);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     expect(tasksDb.markRefinementComplete).toHaveBeenCalledWith(7);
 
+    expect(ensureTaskPullRequest).toHaveBeenCalledWith(7);
     await vi.advanceTimersByTimeAsync(1000);
-    expect(startAgentRun).toHaveBeenCalledWith(7, 'pr', expect.any(Object));
+    expect(startAgentRun).not.toHaveBeenCalledWith(7, 'pr', expect.any(Object));
   });
 
   it('rechecks PR autonomy after scheduling and before starting the PR agent', async () => {
@@ -394,7 +425,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(tasksDb.getWithProject).mockReturnValue({ repo_folder_path: '/r', user_id: 1 } as never);
     vi.mocked(worktreeExists).mockResolvedValue(true);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     vi.mocked(projectsDb.getByIdAdmin).mockReturnValue({
       id: 1,
       github_repo: 'acme/repo',
@@ -413,7 +444,7 @@ describe('buildAgentRunCompletionHandler', () => {
     ] as never);
     vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: MAX_WORKFLOW_RUNS } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
 
     expect(tasksDb.blockWorkflow).toHaveBeenCalledWith(7);
     expect(c.broadcastToTaskSubscribersFn).toHaveBeenCalledWith(7, {
@@ -432,7 +463,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 1 } as never);
     vi.mocked(getRunningAgentForTask).mockReturnValue({ id: 99 } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(startAgentRun).not.toHaveBeenCalled();
@@ -450,7 +481,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 1 } as never);
     vi.mocked(startAgentRun).mockRejectedValue(new Error('dispatch failed'));
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(agentRunsDb.create).not.toHaveBeenCalled();
@@ -465,7 +496,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(agentRunsDb.getByTask).mockReturnValue([]);
     vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, title: 'task title', project_id: 5, workflow_complete: false } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
 
     expect(notifyClaudeComplete).toHaveBeenCalledWith(
       1, 'task title', 7, 100, 5,
@@ -483,7 +514,7 @@ describe('buildAgentRunCompletionHandler', () => {
     ] as never);
     vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, title: 'task title', project_id: 5, workflow_complete: false } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
 
     expect(notifyClaudeComplete).toHaveBeenCalledWith(
       1, 'task title', 7, 100, 5,
@@ -498,7 +529,7 @@ describe('buildAgentRunCompletionHandler', () => {
     ] as never);
     vi.mocked(tasksDb.getById).mockReturnValue({ id: 7 } as never);
 
-    await buildAgentRunCompletionHandler(c)();
+    await buildAgentRunCompletionHandler(c)('success');
 
     expect(agentRunsDb.updateStatus).not.toHaveBeenCalled();
   });

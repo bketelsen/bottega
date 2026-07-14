@@ -17,6 +17,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import { isolateProviderGitHubEnv } from './credentials/providerEnvironment.js';
+
 const DEFAULT_OPENCODE_CONFIG_ROOT = path.join(
   os.homedir(),
   '.config',
@@ -319,10 +321,7 @@ export interface OpenCodeSpawnEnv extends Record<string, string | undefined> {
   XDG_CONFIG_HOME: string;
   XDG_STATE_HOME: string;
   XDG_CACHE_HOME: string;
-  /**
-   * Keep gh pointed at the host's config dir even though XDG_CONFIG_HOME
-   * is pinned per-user for OpenCode isolation.
-   */
+  /** Private, initially empty gh config; host gh credentials are never mounted. */
   GH_CONFIG_DIR: string;
   /**
    * Set to /dev/null so a worktree-local opencode.json cannot override
@@ -349,25 +348,14 @@ const SPAWN_CONFIG_CONTENT = JSON.stringify({
   },
 });
 
-function resolveHostGhConfigDir(): string {
-  if (process.env['GH_CONFIG_DIR']) return process.env['GH_CONFIG_DIR'];
-  if (process.env['XDG_CONFIG_HOME']) {
-    return path.join(process.env['XDG_CONFIG_HOME'], 'gh');
-  }
-  const appData = process.env['AppData'] || process.env['APPDATA'];
-  if (appData) return path.join(appData, 'GitHub CLI');
-  return path.join(process.env['HOME'] || os.homedir(), '.config', 'gh');
-}
-
 /**
  * Build the env handed to a spawned `opencode serve`. Strips every global
  * OpenCode env key so the per-user XDG_* paths + auth.json are
  * authoritative, then sets the per-user XDG_* paths and the
  * OPENCODE_CONFIG=/dev/null guard.
  *
- * gh reads credentials from XDG_CONFIG_HOME unless GH_CONFIG_DIR is set,
- * so we point GH_CONFIG_DIR at the host config before redirecting
- * XDG_CONFIG_HOME to the per-user OpenCode config dir.
+ * gh is pointed at a private directory under the per-user OpenCode config,
+ * never at the host's gh config.
  */
 export function buildOpenCodeSpawnEnv(
   userId: number | string | undefined,
@@ -381,8 +369,10 @@ export function buildOpenCodeSpawnEnv(
   env['XDG_CONFIG_HOME'] = resolveOpenCodeConfigDir(userId);
   env['XDG_STATE_HOME'] = resolveOpenCodeStateDir(userId);
   env['XDG_CACHE_HOME'] = resolveOpenCodeCacheDir(userId);
-  env['GH_CONFIG_DIR'] = resolveHostGhConfigDir();
   env['OPENCODE_CONFIG'] = '/dev/null';
   env['OPENCODE_CONFIG_CONTENT'] = SPAWN_CONFIG_CONTENT;
-  return env as OpenCodeSpawnEnv;
+  return isolateProviderGitHubEnv(
+    env,
+    path.join(resolveOpenCodeConfigDir(userId), 'gh'),
+  ) as OpenCodeSpawnEnv;
 }

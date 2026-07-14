@@ -28,6 +28,11 @@ describe('openCodeCredentials', () => {
     'OPENCODE_CONFIG_DIR',
     'GH_CONFIG_DIR',
     'XDG_CONFIG_HOME',
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'GH_ENTERPRISE_TOKEN',
+    'GITHUB_ENTERPRISE_TOKEN',
+    'SSH_AUTH_SOCK',
   ] as const;
   const savedEnv: Record<string, string | undefined> = {};
 
@@ -194,12 +199,18 @@ describe('openCodeCredentials', () => {
     expect(status.status).toBe('missing');
   });
 
-  it('buildOpenCodeSpawnEnv sets per-user XDG dirs, preserves host gh config, and strips inherited OPENCODE_* keys', () => {
+  it('buildOpenCodeSpawnEnv sets per-user dirs and isolates host GitHub credentials', () => {
     process.env['OPENCODE_AUTH_CONTENT'] = '{"opencode":{"type":"api","key":"bad"}}';
     process.env['OPENCODE_CONFIG'] = '/etc/passwd';
     process.env['OPENCODE_CONFIG_CONTENT'] = '{}';
     process.env['OPENCODE_CONFIG_DIR'] = '/tmp/bad';
     process.env['XDG_CONFIG_HOME'] = '/host/config';
+    process.env['GH_CONFIG_DIR'] = '/host/gh';
+    process.env['GH_TOKEN'] = 'host-gh-token';
+    process.env['GITHUB_TOKEN'] = 'host-github-token';
+    process.env['GH_ENTERPRISE_TOKEN'] = 'host-enterprise-token';
+    process.env['GITHUB_ENTERPRISE_TOKEN'] = 'host-github-enterprise-token';
+    process.env['SSH_AUTH_SOCK'] = '/host/ssh-agent';
 
     const env = buildOpenCodeSpawnEnv(42);
 
@@ -207,10 +218,17 @@ describe('openCodeCredentials', () => {
     expect(env['XDG_CONFIG_HOME']).toBe(resolveOpenCodeConfigDir(42));
     expect(env['XDG_STATE_HOME']).toBe(resolveOpenCodeStateDir(42));
     expect(env['XDG_CACHE_HOME']).toBe(resolveOpenCodeCacheDir(42));
-    // gh stores credentials under its own config dir. Pin it before
-    // redirecting XDG_CONFIG_HOME so `gh pr create` keeps using the
-    // host's login while OpenCode remains isolated.
-    expect(env['GH_CONFIG_DIR']).toBe(path.join('/host/config', 'gh'));
+    expect(env['GH_CONFIG_DIR']).toBe(path.join(resolveOpenCodeConfigDir(42), 'gh'));
+    expect(fs.readdirSync(env['GH_CONFIG_DIR'])).toEqual([]);
+    expect(env['GH_TOKEN']).toBeUndefined();
+    expect(env['GITHUB_TOKEN']).toBeUndefined();
+    expect(env['GH_ENTERPRISE_TOKEN']).toBeUndefined();
+    expect(env['GITHUB_ENTERPRISE_TOKEN']).toBeUndefined();
+    expect(env['SSH_AUTH_SOCK']).toBeUndefined();
+    expect(env['GIT_CONFIG_GLOBAL']).toBe('/dev/null');
+    expect(env['GIT_CONFIG_SYSTEM']).toBe('/dev/null');
+    expect(env['GIT_TERMINAL_PROMPT']).toBe('0');
+    expect(env['GIT_SSH_COMMAND']).toBe('ssh -F /dev/null -o IdentityFile=none -o IdentitiesOnly=yes -o BatchMode=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes');
     expect(env['OPENCODE_AUTH_CONTENT']).toBeUndefined();
     expect(env['OPENCODE_CONFIG_DIR']).toBeUndefined();
     // OPENCODE_CONFIG is pinned to /dev/null so a worktree-local

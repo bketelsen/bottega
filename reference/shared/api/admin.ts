@@ -61,6 +61,31 @@ export type AdminProjectListItem = ProjectRow & { memberCount: number };
 
 export type ListAdminProjectsResponse = AdminProjectListItem[];
 
+export type GitHubAppHealthErrorCode =
+  | 'GITHUB_APP_NOT_CONFIGURED'
+  | 'GITHUB_APP_KEY_INVALID'
+  | 'GITHUB_INSTALLATION_NOT_FOUND'
+  | 'GITHUB_INSTALLATION_SUSPENDED'
+  | 'GITHUB_REPOSITORY_NOT_SELECTED'
+  | 'GITHUB_APP_PERMISSION_MISSING'
+  | 'GITHUB_APP_TOKEN_FAILED';
+
+export interface GitHubAppHealthResponse {
+  mode: 'host' | 'app';
+  status: 'disabled' | 'healthy' | 'degraded' | 'error';
+  configured: boolean;
+  appId: number | null;
+  appSlug: string | null;
+  botLogin: string | null;
+  botUserId: number | null;
+  webhookConfigured: boolean;
+  webhookUrl: string | null;
+  lastMetadataSuccessAt: number | null;
+  lastTokenMintSuccessAt: number | null;
+  errorCode: GitHubAppHealthErrorCode | null;
+  error: string | null;
+}
+
 // Project member rows joined with user info — surfaced via the admin
 // "manage members" panel.
 export interface ProjectMemberListItem {

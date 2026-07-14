@@ -39,6 +39,13 @@ export type AgentRunStatus =
   | 'failed'
   | 'blocked';
 
+export type GitHubFinalizeStatus =
+  | 'none'
+  | 'ready'
+  | 'finalizing'
+  | 'finalized'
+  | 'failed';
+
 export type SqliteBoolean = 0 | 1;
 
 // ---- users -----------------------------------------------------------------
@@ -76,6 +83,10 @@ export interface ProjectRow {
   systemd_service_name: string | null;
   app_url: string | null;
   github_repo: string | null;
+  // Optional only for in-memory callers compiled across this additive migration;
+  // migrated SQLite rows always expose both columns, with NULL until verified.
+  github_repository_id?: number | null;
+  github_installation_id?: number | null;
   github_automation_enabled: SqliteBoolean;
   autonomy_tier: AutonomyTier;
   created_at: string;
@@ -154,6 +165,12 @@ export interface AgentRunRow {
   // Diagnostics column. Runtime never reads this — it always reads the
   // provider off the linked `conversations` row. NOT NULL DEFAULT 'anthropic'.
   provider: Provider;
+  // Optional only for in-memory callers compiled across this additive migration;
+  // migrated SQLite rows always expose all four fields.
+  github_finalize_status?: GitHubFinalizeStatus;
+  github_finalize_head_sha?: string | null;
+  github_finalize_error?: string | null;
+  github_finalize_started_at?: string | null;
   created_at: string;
   completed_at: string | null;
 }

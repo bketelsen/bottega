@@ -24,6 +24,12 @@ describe('codexCredentials', () => {
     'OPENAI_ORG_ID',
     'CODEX_HOME',
     'CODEX_API_KEY',
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'GH_ENTERPRISE_TOKEN',
+    'GITHUB_ENTERPRISE_TOKEN',
+    'SSH_AUTH_SOCK',
+    'GH_CONFIG_DIR',
   ] as const;
   const savedEnv: Record<string, string | undefined> = {};
 
@@ -139,6 +145,12 @@ describe('codexCredentials', () => {
     process.env['OPENAI_ORG_ID'] = 'org_bad';
     process.env['CODEX_HOME'] = '/should/be/stripped';
     process.env['CODEX_API_KEY'] = 'codex-bad';
+    process.env['GH_TOKEN'] = 'host-gh-token';
+    process.env['GITHUB_TOKEN'] = 'host-github-token';
+    process.env['GH_ENTERPRISE_TOKEN'] = 'host-enterprise-token';
+    process.env['GITHUB_ENTERPRISE_TOKEN'] = 'host-github-enterprise-token';
+    process.env['SSH_AUTH_SOCK'] = '/host/ssh-agent';
+    process.env['GH_CONFIG_DIR'] = '/host/gh';
 
     const env = buildCodexSdkEnv(42);
 
@@ -147,6 +159,17 @@ describe('codexCredentials', () => {
     expect(env['OPENAI_BASE_URL']).toBeUndefined();
     expect(env['OPENAI_ORG_ID']).toBeUndefined();
     expect(env['CODEX_API_KEY']).toBeUndefined();
+    expect(env['GH_TOKEN']).toBeUndefined();
+    expect(env['GITHUB_TOKEN']).toBeUndefined();
+    expect(env['GH_ENTERPRISE_TOKEN']).toBeUndefined();
+    expect(env['GITHUB_ENTERPRISE_TOKEN']).toBeUndefined();
+    expect(env['SSH_AUTH_SOCK']).toBeUndefined();
+    expect(env['GH_CONFIG_DIR']).toBe(path.join(resolveCodexHomeDir(42), 'gh'));
+    expect(fs.readdirSync(env['GH_CONFIG_DIR']!)).toEqual([]);
+    expect(env['GIT_CONFIG_GLOBAL']).toBe('/dev/null');
+    expect(env['GIT_CONFIG_SYSTEM']).toBe('/dev/null');
+    expect(env['GIT_TERMINAL_PROMPT']).toBe('0');
+    expect(env['GIT_SSH_COMMAND']).toBe('ssh -F /dev/null -o IdentityFile=none -o IdentitiesOnly=yes -o BatchMode=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes');
     expect(env['HOME']).toBe(process.env['HOME']);
   });
 

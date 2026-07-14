@@ -149,7 +149,11 @@ export async function startAgentRun(
       // implement⇄review loop; a clean rebase here means the PR is mergeable
       // without relying on the model. If the rebase hits conflicts it is
       // safely aborted (see rebaseOnMain) and the PR prompt resolves them.
-      const rebaseResult = await rebaseOnMain(taskWithProject.repo_folder_path, taskId);
+      const rebaseResult = await rebaseOnMain(
+        taskWithProject.repo_folder_path,
+        taskId,
+        { projectId: taskWithProject.project_id },
+      );
       if (rebaseResult.success) {
         console.log(`[AgentRunner] Rebased task ${taskId} branch onto main before PR agent`);
       } else if (rebaseResult.conflicts) {
@@ -164,7 +168,11 @@ export async function startAgentRun(
 
       // IMPORTANT: Use main repo path (not worktree path) for getPullRequestStatus
       // getPullRequestStatus internally derives the worktree path from repo + taskId
-      const prStatus = await getPullRequestStatus(taskWithProject.repo_folder_path, taskId);
+      const prStatus = await getPullRequestStatus(
+        taskWithProject.repo_folder_path,
+        taskId,
+        { projectId: taskWithProject.project_id },
+      );
       const prUrl = prStatus.exists ? prStatus.url ?? null : null;
 
       // Use review-specific prompt if triggered by webhook with review comments
@@ -181,7 +189,11 @@ export async function startAgentRun(
       break;
     }
     case 'yolo': {
-      const yoloPrStatus = await getPullRequestStatus(taskWithProject.repo_folder_path, taskId);
+      const yoloPrStatus = await getPullRequestStatus(
+        taskWithProject.repo_folder_path,
+        taskId,
+        { projectId: taskWithProject.project_id },
+      );
       const yoloPrUrl = yoloPrStatus.exists ? yoloPrStatus.url ?? null : null;
       message = await generateYoloMessage(taskDocPath, taskId, yoloPrUrl);
       break;

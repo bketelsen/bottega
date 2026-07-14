@@ -74,6 +74,10 @@ vi.mock('../services/agentRunner.js', () => ({
   forceCompleteRunningAgents: vi.fn()
 }));
 
+vi.mock('../services/prService.js', () => ({
+  ensureTaskPullRequest: vi.fn()
+}));
+
 // Mock the worktree service
 vi.mock('../services/worktree.js', () => ({
   isGitRepository: vi.fn(),
@@ -107,6 +111,8 @@ import { hasProjectAccess, getProject } from '../services/projectService.js';
 import { getAllTasks } from '../services/taskService.js';
 import { readTaskDoc, writeTaskDoc, deleteTaskArchive, getRecordingPath } from '../services/documentation.js';
 import { forceCompleteRunningAgents } from '../services/agentRunner.js';
+import { ensureTaskPullRequest } from '../services/prService.js';
+import { GitHubCapabilityError } from '../services/github/capabilities.js';
 import {
   isGitRepository,
   createWorktree,
@@ -135,6 +141,43 @@ describe('Tasks Routes - Phase 3', () => {
       return latestCreate?.type === 'return' ? latestCreate.value as never : undefined;
     });
     vi.mocked(getPullRequestStatus).mockResolvedValue({ success: true, exists: false });
+    vi.mocked(ensureTaskPullRequest).mockImplementation(async (taskId, options = {}) => {
+      const task = tasksDb.getWithProject(taskId);
+      if (!task) return { success: false, error: `Task ${taskId} not found` };
+      const beforeEffect = (action: 'push' | 'createPR') => {
+        const project = getProject(task.project_id, testUserId);
+        if (project?.github_repo && (
+          project.github_automation_enabled !== 1
+          || !['pr', 'automerge'].includes(project.autonomy_tier)
+        )) {
+          throw new GitHubCapabilityError(
+            project.id,
+            action,
+            project.autonomy_tier,
+            project.github_automation_enabled === 1,
+          );
+        }
+      };
+
+      if ('body' in options) {
+        const changes = await hasUncommittedChanges(task.repo_folder_path, taskId);
+        if (changes.hasChanges) {
+          const committed = await commitAllChanges(task.repo_folder_path, taskId, options.title!);
+          if (!committed.success) return { success: false, error: `Failed to commit: ${committed.error}` };
+        }
+        const status = await getWorktreeStatus(task.repo_folder_path, taskId);
+        if (status.ahead === 0) return { success: false, error: 'No changes to create a PR' };
+        return createPullRequest(
+          task.repo_folder_path,
+          taskId,
+          options.title!,
+          options.body || '',
+          { beforeEffect },
+        );
+      }
+
+      return pushChanges(task.repo_folder_path, taskId, options.title!, { beforeEffect });
+    });
 
     // Default to allowing access - tests can override if needed
     vi.mocked(hasProjectAccess).mockReturnValue(true);
@@ -798,7 +841,13 @@ describe('Tasks Routes - Phase 3', () => {
 
       expect(response.status).toBe(201);
       expect(isGitRepository).toHaveBeenCalledWith('/path/to/repo');
-      expect(createWorktree).toHaveBeenCalledWith('/path/to/repo', 5, 'New Feature', undefined);
+      expect(createWorktree).toHaveBeenCalledWith(
+        '/path/to/repo',
+        5,
+        'New Feature',
+        undefined,
+        { projectId: 1 },
+      );
       expect(response.body.worktree_path).toBe('/path/to/repo-worktrees/task-5');
       expect(response.body.worktree_branch).toBe('task/5-new-feature');
     });

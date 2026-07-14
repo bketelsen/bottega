@@ -18,6 +18,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import { isolateProviderGitHubEnv } from './credentials/providerEnvironment.js';
+
 const DEFAULT_COPILOT_CONFIG_ROOT = path.join(
   os.homedir(),
   '.config',
@@ -34,6 +36,8 @@ const GLOBAL_COPILOT_AUTH_ENV_KEYS = [
   'COPILOT_GITHUB_TOKEN',
   'GH_TOKEN',
   'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
 ] as const;
 
 export class CopilotCredentialsError extends Error {
@@ -282,6 +286,20 @@ export interface CopilotSdkEnv extends Record<string, string | undefined> {
   PATH: string | undefined;
 }
 
+export function buildCopilotRuntimeEnv(
+  userId: number | string | undefined,
+): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {
+    HOME: process.env['HOME'],
+    PATH: process.env['PATH'],
+  };
+  removeInheritedCopilotAuthEnv(env);
+  return isolateProviderGitHubEnv(
+    env,
+    path.join(resolveCopilotHomeDir(userId), 'gh'),
+  );
+}
+
 /**
  * Build the env tagged onto a Copilot turn's `ProviderRunOptions.env`. The
  * GitHub token is NOT placed here — it is injected at client construction in
@@ -292,11 +310,7 @@ export interface CopilotSdkEnv extends Record<string, string | undefined> {
 export function buildCopilotSdkEnv(
   userId: number | string | undefined,
 ): CopilotSdkEnv {
-  const env: Record<string, string | undefined> = {
-    HOME: process.env['HOME'],
-    PATH: process.env['PATH'],
-  };
-  removeInheritedCopilotAuthEnv(env);
+  const env = buildCopilotRuntimeEnv(userId);
   env['BOTTEGA_USER_ID'] = normalizeUserId(userId);
   return env as CopilotSdkEnv;
 }

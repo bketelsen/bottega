@@ -16,12 +16,9 @@ import MarkdownEditor from './MarkdownEditor';
 import ConversationList from './ConversationList';
 import AgentSection from './AgentSection';
 import ReviewRecording from './ReviewRecording';
-import CIFixModal from './CIFixModal';
 import { cn } from '../lib/utils';
 import { api } from '../utils/api';
 import { cleanupWorktreeOnComplete } from '../utils/worktreeCleanup';
-import { useClaudeAuth } from '../contexts/ClaudeAuthContext';
-import type { Provider } from '../../shared/providers/types';
 import type {
   ProjectRow,
   TaskRow,
@@ -144,10 +141,8 @@ function TaskDetailView({
   onResumeConversation,
   onDeleteConversation,
   onRenameConversation,
-  onCIFixConversationCreated,
   className
 }: TaskDetailViewProps) {
-  const { requireClaudeAuth } = useClaudeAuth();
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [isUpdatingWorkflow, setIsUpdatingWorkflow] = useState(false);
@@ -162,8 +157,7 @@ function TaskDetailView({
   const [isMerging, setIsMerging] = useState(false);
   const [isDiscarding, setIsDiscarding] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
-  const [isCreatingCIFixConversation, setIsCreatingCIFixConversation] = useState(false);
-  const [showCIFixModal, setShowCIFixModal] = useState(false);
+  const [isStartingCIFixAgent, setIsStartingCIFixAgent] = useState(false);
   const [worktreeError, setWorktreeError] = useState<string | null>(null);
 
   // Web server state
@@ -425,58 +419,17 @@ function TaskDetailView({
     }
   };
 
-  const handleCIFixConversation = async (provider: Provider, model: string) => {
+  const handleCIFixAgent = async () => {
     if (!task?.id || !prStatus?.url) return;
-    // The Claude-connection gate only applies to the Anthropic backend;
-    // OpenAI/OpenCode validate their own credentials server-side.
-    if (provider === 'anthropic' && !requireClaudeAuth()) return;
-
-    setIsCreatingCIFixConversation(true);
+    setIsStartingCIFixAgent(true);
     setWorktreeError(null);
 
     try {
-      // Construct the pre-filled message
-      const message = `The git worktree for this task contains a complete implementation.
-
-CI is failing for the PR: ${prStatus.url}
-
-Please:
-1. Retrieve the CI failures from the GitHub Action
-2. Analyze what's causing the failures
-3. Fix the issues in the codebase
-4. Push the changes
-5. Monitor the PR status and iterate until all checks pass`;
-
-      // Create conversation with the pre-filled message on the explicitly
-      // chosen (provider, model).
-      const response = await api.conversations.createWithMessage(task.id, {
-        message,
-        projectPath: worktreeStatus?.worktreePath,
-        permissionMode: 'bypassPermissions',
-        provider,
-        model,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json() as { error?: string };
-        throw new Error(errorData.error || 'Failed to create conversation');
-      }
-
-      const conversation = await response.json();
-
-      setShowCIFixModal(false);
-
-      // Navigate to the chat page with the initial message
-      if (onCIFixConversationCreated) {
-        onCIFixConversationCreated({
-          ...(conversation as unknown as Record<string, unknown>),
-          __initialMessage: message
-        });
-      }
+      await onRunAgent('pr');
     } catch (err) {
       setWorktreeError((err as Error).message);
     } finally {
-      setIsCreatingCIFixConversation(false);
+      setIsStartingCIFixAgent(false);
     }
   };
 
@@ -910,18 +863,18 @@ Please:
                       );
                     }
 
-                    // Red state with error indicator - clicking creates fix conversation
+                    // Failed CI repairs must be run-scoped so readiness can be finalized safely.
                     if (ciStatus === 'failed') {
                       return (
                         <Button
                           variant="default"
                           size="sm"
-                          onClick={() => setShowCIFixModal(true)}
-                          disabled={isCreatingCIFixConversation}
+                          onClick={() => void handleCIFixAgent()}
+                          disabled={isStartingCIFixAgent}
                           className="h-7 text-xs bg-red-600 hover:bg-red-700"
-                          title="CI checks failed - click to pick a model and create a fix conversation"
+                          title="CI checks failed - start a PR repair agent"
                         >
-                          {isCreatingCIFixConversation ? (
+                          {isStartingCIFixAgent ? (
                             <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin mr-1.5" />
                           ) : (
                             <AlertCircle className="w-3.5 h-3.5 mr-1.5" />
@@ -1065,13 +1018,6 @@ Please:
         </div>
       </div>
 
-      <CIFixModal
-        isOpen={showCIFixModal}
-        onClose={() => setShowCIFixModal(false)}
-        onSubmit={handleCIFixConversation}
-        prUrl={prStatus?.url}
-        isSubmitting={isCreatingCIFixConversation}
-      />
     </div>
   );
 }

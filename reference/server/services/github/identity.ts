@@ -2,7 +2,7 @@ import { githubClient, type GitHubClient } from './client.js';
 
 export const BOTTEGA_COMMENT_MARKER = '<!-- bottega:';
 
-type IdentityClient = Pick<GitHubClient, 'getSelf'>;
+type IdentityClient = Pick<GitHubClient, 'getAuthMode' | 'getAppIdentity' | 'getSelf'>;
 
 export class GitHubIdentity {
   private login: string | undefined;
@@ -27,7 +27,10 @@ export class GitHubIdentity {
 
   private async lookup(): Promise<string | null> {
     try {
-      const login = (await this.client.getSelf()).login.trim();
+      const user = this.client.getAuthMode() === 'app'
+        ? await this.client.getAppIdentity()
+        : await this.client.getSelf();
+      const login = user.login.trim();
       if (!login) return null;
       this.login = login;
       return login;

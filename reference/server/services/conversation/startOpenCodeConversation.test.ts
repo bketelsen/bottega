@@ -4,6 +4,7 @@ import type { UnifiedMessage } from '@shared/providers/types';
 vi.mock('../../database/db.js', () => ({
   tasksDb: {
     getWithProject: vi.fn(),
+    getById: vi.fn(),
   },
   conversationsDb: {
     create: vi.fn(),
@@ -86,7 +87,7 @@ vi.mock('./slashCommands.js', () => ({
   resolveSlashCommand: vi.fn(async (m: string | null) => m),
 }));
 
-import { tasksDb, conversationsDb } from '../../database/db.js';
+import { tasksDb, conversationsDb, agentRunsDb } from '../../database/db.js';
 import { openCodeProvider } from '../providers/opencode/index.js';
 import { mirrorOpenCodeEvent } from '../providers/opencode/messageMirror.js';
 import {
@@ -189,7 +190,7 @@ describe('startOpenCodeConversation', () => {
         id: 'result',
         provider: 'opencode',
         providerSessionId: SID,
-        raw: null,
+        raw: { type: 'session.idle' },
         isError: false,
         usage: { input_tokens: 1, output_tokens: 2 },
       },
@@ -232,7 +233,7 @@ describe('startOpenCodeConversation', () => {
         id: 'r',
         provider: 'opencode',
         providerSessionId: SID,
-        raw: null,
+        raw: { type: 'session.idle' },
         isError: false,
       },
     ];
@@ -277,7 +278,7 @@ describe('startOpenCodeConversation', () => {
         id: 'r',
         provider: 'opencode',
         providerSessionId: SID,
-        raw: null,
+        raw: { type: 'session.idle' },
         isError: false,
       },
     ];
@@ -337,7 +338,7 @@ describe('startOpenCodeConversation', () => {
         id: 'r',
         provider: 'opencode',
         providerSessionId: SID,
-        raw: null,
+        raw: { type: 'session.idle' },
         isError: false,
       },
     ];
@@ -375,7 +376,7 @@ describe('startOpenCodeConversation', () => {
         id: 'r',
         provider: 'opencode',
         providerSessionId: SID,
-        raw: null,
+        raw: { type: 'session.idle' },
         isError: false,
       },
     ]);
@@ -399,5 +400,36 @@ describe('startOpenCodeConversation', () => {
       XDG_DATA_HOME: '/fake/data',
       OPENCODE_CONFIG: '/dev/null',
     });
+  });
+
+  it('does not treat step-finish as terminal success', async () => {
+    vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+      { id: 9, conversation_id: 11, agent_type: 'implementation', status: 'running' },
+    ] as never);
+    const fakeRun = buildFakeRun([{
+      type: 'result',
+      id: 'step-finish',
+      provider: 'opencode',
+      providerSessionId: SID,
+      raw: { type: 'message.part.updated', properties: { part: { type: 'step-finish' } } },
+      isError: false,
+    }]);
+    vi.mocked(openCodeProvider.startTurn).mockResolvedValueOnce({
+      providerSessionId$: fakeRun.providerSessionId$,
+      abort: fakeRun.abort,
+      pid: null,
+      events: fakeRun.events(),
+    });
+
+    await startOpenCodeConversation(1, 'hi', {
+      userId: 1,
+      provider: 'opencode',
+      model: 'opencode/kimi-k2.6',
+      broadcastFn,
+    });
+    await waitForBroadcast(broadcastFn, 'streaming-ended');
+
+    expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(9, 'failed');
+    expect(broadcastFn).not.toHaveBeenCalledWith(11, expect.objectContaining({ type: 'claude-complete' }));
   });
 });

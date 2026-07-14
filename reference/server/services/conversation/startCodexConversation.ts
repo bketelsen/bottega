@@ -48,15 +48,21 @@ import {
 } from './streamingLifecycle.js';
 import { buildAgentRunCompletionHandler } from './agentRunLifecycle.js';
 import { resolveSlashCommand } from './slashCommands.js';
-import type { ConversationOptions, StreamingContext } from './types.js';
+import type { ConversationOptions, ProviderTerminationOutcome, StreamingContext } from './types.js';
 import type { BroadcastFn } from '@shared/websocket/messages';
 import type { UnifiedMessage } from '@shared/providers/types';
 
-function composeOnComplete(ctx: StreamingContext): () => Promise<void> {
-  return composeAsync<void>(
+function composeOnComplete(ctx: StreamingContext): (outcome: ProviderTerminationOutcome) => Promise<void> {
+  return composeAsync<ProviderTerminationOutcome>(
     () => handleStreamingComplete(ctx),
     buildAgentRunCompletionHandler(ctx),
   );
+}
+
+function isCodexSuccess(unified: UnifiedMessage): boolean {
+  return unified.type === 'result' &&
+    !unified.isError &&
+    (unified.raw as { type?: string } | null)?.type === 'turn.completed';
 }
 
 /**
@@ -291,6 +297,7 @@ export async function sendCodexMessage(
   });
 
   try {
+    let outcome: ProviderTerminationOutcome = 'error';
     for await (const unified of run.events) {
       broadcastUnified(broadcastFn, conversationId, unified);
       await mirrorCodexEvent(
@@ -300,6 +307,7 @@ export async function sendCodexMessage(
         console.warn('[ConversationAdapter] Codex resume mirror failed:', err);
       });
       if (unified.type === 'result') {
+        outcome = isCodexSuccess(unified) ? 'success' : 'error';
         await contextUsageTracker.onResult({
           type: 'result',
           ...(unified.usage ? { modelUsage: { codex: unified.usage } } : {}),
@@ -308,7 +316,7 @@ export async function sendCodexMessage(
     }
 
     activeSessions.delete(resumeSessionId);
-    if (broadcastFn) {
+    if (broadcastFn && outcome === 'success') {
       broadcastFn(conversationId, {
         type: 'claude-complete',
         sessionId: resumeSessionId,
@@ -316,7 +324,7 @@ export async function sendCodexMessage(
         isNewSession: false,
       });
     }
-    await composeOnComplete(ctx)();
+    await composeOnComplete(ctx)(abortController.signal.aborted && outcome !== 'success' ? 'aborted' : outcome);
   } catch (error) {
     console.error('[ConversationAdapter] Codex resume error:', error);
     activeSessions.delete(resumeSessionId);
@@ -327,7 +335,7 @@ export async function sendCodexMessage(
         error: errMsg,
       });
     }
-    await composeOnComplete(ctx)();
+    await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');
     throw error;
   }
 }
@@ -435,6 +443,7 @@ export async function startCodexConversation(
 
     void (async () => {
       try {
+        let outcome: ProviderTerminationOutcome = 'error';
         for await (const unified of run.events) {
           // First time we see a provider session id, stamp the row +
           // fire the streaming-started lifecycle.
@@ -535,6 +544,7 @@ export async function startCodexConversation(
           }
 
           if (unified.type === 'result') {
+            outcome = isCodexSuccess(unified) ? 'success' : 'error';
             await contextUsageTracker.onResult({
               type: 'result',
               ...(unified.usage ? { modelUsage: { codex: unified.usage } } : {}),
@@ -551,7 +561,7 @@ export async function startCodexConversation(
           await handleVideoRecording(ctx.videoConfig);
         }
 
-        if (broadcastFn) {
+        if (broadcastFn && outcome === 'success') {
           broadcastFn(conversationId, {
             type: 'claude-complete',
             sessionId: ctx.claudeSessionId,
@@ -560,7 +570,7 @@ export async function startCodexConversation(
           });
         }
 
-        await composeOnComplete(ctx)();
+        await composeOnComplete(ctx)(abortController.signal.aborted && outcome !== 'success' ? 'aborted' : outcome);
       } catch (error) {
         console.error('[ConversationAdapter] Codex streaming error:', error);
         if (ctx.claudeSessionId) {
@@ -573,6 +583,7 @@ export async function startCodexConversation(
 
         if (!resolved) {
           clearTimeout(timeout);
+          await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');
           reject(error instanceof Error ? error : new Error(String(error)));
           return;
         }
@@ -583,7 +594,7 @@ export async function startCodexConversation(
             error: errMsg,
           });
         }
-        await composeOnComplete(ctx)();
+        await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');
       }
     })();
   });

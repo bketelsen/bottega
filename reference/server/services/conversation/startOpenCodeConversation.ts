@@ -32,7 +32,7 @@
 //     reflection.
 
 import { promises as fs } from 'fs';
-import { agentRunsDb, conversationsDb, tasksDb } from '../../database/db.js';
+import { conversationsDb, tasksDb } from '../../database/db.js';
 import { resolveResumeModelEffort } from '../agentModelSettings.js';
 import { getWorktreeProjectPath, worktreeExists } from '../worktree.js';
 import { generateConversationTitle } from '../titleGenerator.js';
@@ -50,15 +50,21 @@ import {
 } from './streamingLifecycle.js';
 import { buildAgentRunCompletionHandler } from './agentRunLifecycle.js';
 import { resolveSlashCommand } from './slashCommands.js';
-import type { ConversationOptions, StreamingContext } from './types.js';
+import type { ConversationOptions, ProviderTerminationOutcome, StreamingContext } from './types.js';
 import type { BroadcastFn } from '@shared/websocket/messages';
 import type { UnifiedMessage } from '@shared/providers/types';
 
-function composeOnComplete(ctx: StreamingContext): () => Promise<void> {
-  return composeAsync<void>(
+function composeOnComplete(ctx: StreamingContext): (outcome: ProviderTerminationOutcome) => Promise<void> {
+  return composeAsync<ProviderTerminationOutcome>(
     () => handleStreamingComplete(ctx),
     buildAgentRunCompletionHandler(ctx),
   );
+}
+
+function isOpenCodeSuccess(unified: UnifiedMessage): boolean {
+  return unified.type === 'result' &&
+    !unified.isError &&
+    (unified.raw as { type?: string } | null)?.type === 'session.idle';
 }
 
 function unifiedToWireMessage(unified: UnifiedMessage): Record<string, unknown> | null {
@@ -170,37 +176,6 @@ function broadcastUnified(
 }
 
 /**
- * Pre-mark a still-running agent run as 'failed' the instant we see a
- * `result` event with `isError: true`. Without this the streaming loop
- * ends normally (no thrown exception — OpenCode reports model errors as
- * SSE events, not HTTP errors), composeOnComplete sees status='running'
- * → marks 'completed' → auto-chains → next agent fails the same way →
- * runaway loop until MAX_WORKFLOW_RUNS=25 trips. Setting the status
- * here makes composeOnComplete's "status === 'failed' → no-op" branch
- * fire instead. Safe to call when there is no taskId or no linked
- * agent run (no-op).
- */
-function failLinkedAgentRunIfRunning(
-  taskId: number | undefined,
-  conversationId: number,
-): void {
-  if (!taskId) return;
-  try {
-    const runs = agentRunsDb.getByTask(taskId);
-    const linked = runs.find((r) => r.conversation_id === conversationId);
-    if (linked && linked.status === 'running') {
-      agentRunsDb.updateStatus(linked.id, 'failed');
-    }
-  } catch (err) {
-    // Best-effort: never throw out of an error-handling path.
-    console.warn(
-      '[ConversationAdapter] failed to pre-mark OpenCode agent run as failed:',
-      err,
-    );
-  }
-}
-
-/**
  * Resume an existing OpenCode conversation. Mirrors `sendMessage` for
  * the Anthropic path: looks the conversation up, builds the per-user
  * env, and calls `openCodeProvider.sendTurnMessage(resumeSessionId)`.
@@ -305,6 +280,7 @@ export async function sendOpenCodeMessage(
   });
 
   try {
+    let outcome: ProviderTerminationOutcome = 'error';
     for await (const unified of run.events) {
       broadcastUnified(broadcastFn, conversationId, unified);
       await mirrorOpenCodeEvent(
@@ -314,9 +290,7 @@ export async function sendOpenCodeMessage(
         console.warn('[ConversationAdapter] OpenCode resume mirror failed:', err);
       });
       if (unified.type === 'result') {
-        if (unified.isError) {
-          failLinkedAgentRunIfRunning(taskId ?? undefined, conversationId);
-        }
+        outcome = isOpenCodeSuccess(unified) ? 'success' : 'error';
         await contextUsageTracker.onResult({
           type: 'result',
           ...(unified.usage ? { modelUsage: { opencode: unified.usage } } : {}),
@@ -325,7 +299,7 @@ export async function sendOpenCodeMessage(
     }
 
     activeSessions.delete(resumeSessionId);
-    if (broadcastFn) {
+    if (broadcastFn && outcome === 'success') {
       broadcastFn(conversationId, {
         type: 'claude-complete',
         sessionId: resumeSessionId,
@@ -333,7 +307,7 @@ export async function sendOpenCodeMessage(
         isNewSession: false,
       });
     }
-    await composeOnComplete(ctx)();
+    await composeOnComplete(ctx)(abortController.signal.aborted && outcome !== 'success' ? 'aborted' : outcome);
   } catch (error) {
     console.error('[ConversationAdapter] OpenCode resume error:', error);
     activeSessions.delete(resumeSessionId);
@@ -344,7 +318,7 @@ export async function sendOpenCodeMessage(
         error: errMsg,
       });
     }
-    await composeOnComplete(ctx)();
+    await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');
     throw error;
   }
 }
@@ -450,6 +424,7 @@ export async function startOpenCodeConversation(
 
     void (async () => {
       try {
+        let outcome: ProviderTerminationOutcome = 'error';
         for await (const unified of run.events) {
           if (
             !resolved &&
@@ -543,9 +518,7 @@ export async function startOpenCodeConversation(
           }
 
           if (unified.type === 'result') {
-            if (unified.isError) {
-              failLinkedAgentRunIfRunning(taskId, conversationId);
-            }
+            outcome = isOpenCodeSuccess(unified) ? 'success' : 'error';
             await contextUsageTracker.onResult({
               type: 'result',
               ...(unified.usage ? { modelUsage: { opencode: unified.usage } } : {}),
@@ -561,7 +534,7 @@ export async function startOpenCodeConversation(
           await handleVideoRecording(ctx.videoConfig);
         }
 
-        if (broadcastFn) {
+        if (broadcastFn && outcome === 'success') {
           broadcastFn(conversationId, {
             type: 'claude-complete',
             sessionId: ctx.claudeSessionId,
@@ -570,7 +543,7 @@ export async function startOpenCodeConversation(
           });
         }
 
-        await composeOnComplete(ctx)();
+        await composeOnComplete(ctx)(abortController.signal.aborted && outcome !== 'success' ? 'aborted' : outcome);
       } catch (error) {
         console.error('[ConversationAdapter] OpenCode streaming error:', error);
         if (ctx.claudeSessionId) {
@@ -583,6 +556,7 @@ export async function startOpenCodeConversation(
 
         if (!resolved) {
           clearTimeout(timeout);
+          await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');
           reject(error instanceof Error ? error : new Error(String(error)));
           return;
         }
@@ -593,7 +567,7 @@ export async function startOpenCodeConversation(
             error: errMsg,
           });
         }
-        await composeOnComplete(ctx)();
+        await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');
       }
     })();
   });

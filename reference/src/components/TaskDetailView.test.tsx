@@ -272,6 +272,38 @@ describe('TaskDetailView Component', () => {
     });
   });
 
+  describe('CI repair', () => {
+    it('starts a run-scoped PR agent instead of an ordinary conversation', async () => {
+      vi.mocked(api.tasks.getWorktree).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          branch: 'task/1',
+          ahead: 1,
+          behind: 0,
+          mainBranch: 'main',
+          worktreePath: '/tmp/task-1',
+        }),
+      } as never);
+      vi.mocked(api.tasks.getPR).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          exists: true,
+          url: 'https://github.com/example/repo/pull/1',
+          mergeable: 'MERGEABLE',
+          ciStatus: { status: 'failed', checks: [] },
+        }),
+      } as never);
+      const onRunAgent = vi.fn().mockResolvedValue(undefined);
+
+      render(<TaskDetailView {...defaultProps} onRunAgent={onRunAgent} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Fix CI' }));
+
+      await waitFor(() => expect(onRunAgent).toHaveBeenCalledWith('pr'));
+      expect(api.conversations.createWithMessage).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Status Display', () => {
     it('should show Pending status for pending task', () => {
       render(<TaskDetailView {...defaultProps} task={{ ...mockTask, status: 'pending' }} />);

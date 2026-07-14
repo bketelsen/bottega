@@ -994,7 +994,7 @@ it('should broadcast streaming-ended event when streaming completes', async () =
       expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(5, 'completed');
     });
 
-    it("marks agent run 'completed' on SDK error and lets the loop chain to the next agent", async () => {
+    it("marks the agent run failed on SDK error and stops the loop", async () => {
       // Under the new model the streaming loop never writes 'failed' on
       // catastrophic SDK errors. The catch path persists a synthetic
       // sdk_error system message into the transcript and marks the run
@@ -1029,8 +1029,8 @@ it('should broadcast streaming-ended event when streaming completes', async () =
       // Wait for error handling
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(5, 'completed');
-      expect(agentRunsDb.updateStatus).not.toHaveBeenCalledWith(5, 'failed');
+      expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(5, 'failed');
+      expect(agentRunsDb.updateStatus).not.toHaveBeenCalledWith(5, 'completed');
     });
 
     it('should timeout if session ID not received', async () => {
@@ -2170,7 +2170,7 @@ it('should broadcast streaming-ended event when streaming completes', async () =
       expect(broadcastFn).toHaveBeenCalledWith(1, expect.objectContaining({ type: 'claude-complete' }));
     });
 
-    it("startConversation: gives up after one retry — surfaces claude-error, marks 'completed' so the loop chains", async () => {
+    it("startConversation: gives up after one retry, surfaces claude-error, and fails the run", async () => {
       // Two consecutive 401s exhaust the in-process retry budget. Under the
       // new deterministic-failed-writer model, the streaming loop does NOT
       // write 'failed' on its way out — that's reserved for user-Stop and
@@ -2191,8 +2191,8 @@ it('should broadcast streaming-ended event when streaming completes', async () =
 
       expect(query).toHaveBeenCalledTimes(2);
       expect(broadcastFn).toHaveBeenCalledWith(1, expect.objectContaining({ type: 'claude-error' }));
-      expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(5, 'completed');
-      expect(agentRunsDb.updateStatus).not.toHaveBeenCalledWith(5, 'failed');
+      expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(5, 'failed');
+      expect(agentRunsDb.updateStatus).not.toHaveBeenCalledWith(5, 'completed');
     });
 
     it('startConversation: does not retry non-auth streaming errors', async () => {
@@ -2291,11 +2291,11 @@ it('should broadcast streaming-ended event when streaming completes', async () =
         expect(broadcastFn).toHaveBeenCalledWith(1, expect.objectContaining({ type: 'claude-complete' }));
       });
 
-      it("startConversation: in-band 401 twice emits claude-error and marks 'completed' (loop continues)", async () => {
+      it("startConversation: in-band 401 twice emits claude-error and fails the run", async () => {
         // Same shape as the thrown-error case above: post-simplification the
         // streaming loop never writes 'failed'. The catch path persists a
         // synthetic sdk_error message into the transcript and marks the run
-        // 'completed' so the loop can chain to the next agent.
+        // Authentication failure must stop the loop rather than chain.
         const agentRun = { id: 7, conversation_id: 1, agent_type: 'planification', status: 'running', task_id: 1 };
         vi.mocked(agentRunsDb.getByTask).mockReturnValue([agentRun] as never);
 
@@ -2312,8 +2312,8 @@ it('should broadcast streaming-ended event when streaming completes', async () =
 
         expect(query).toHaveBeenCalledTimes(2);
         expect(broadcastFn).toHaveBeenCalledWith(1, expect.objectContaining({ type: 'claude-error' }));
-        expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(7, 'completed');
-        expect(agentRunsDb.updateStatus).not.toHaveBeenCalledWith(7, 'failed');
+        expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(7, 'failed');
+        expect(agentRunsDb.updateStatus).not.toHaveBeenCalledWith(7, 'completed');
       });
 
       it('sendMessage: in-band 401 transparently retries', async () => {

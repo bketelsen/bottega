@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { runCommand, type RunCommandOptions, type RunCommandResult } from '../shell.js';
 import { projectsDb } from '../../database/db.js';
 import { normalizeGitHubRepository } from '../../../shared/schemas/github.js';
@@ -6,6 +10,14 @@ import {
   type GitHubAction,
   type GitHubProject,
 } from './capabilities.js';
+import {
+  getGitHubAppMetadata,
+  getGitHubAuthMode,
+  getRepositoryAuth,
+  type GitHubAppMetadata,
+  type GitHubAuthMode,
+  type GitHubRepositoryAuth,
+} from './appAuth.js';
 
 export interface GitHubUser {
   login: string;
@@ -179,7 +191,7 @@ type CommandRunner = (
   options?: RunCommandOptions,
 ) => Promise<RunCommandResult>;
 
-interface GitHubClientOptions {
+export interface GitHubClientOptions {
   runner?: CommandRunner;
   maxAttempts?: number;
   baseBackoffMs?: number;
@@ -187,6 +199,15 @@ interface GitHubClientOptions {
   sleep?: (milliseconds: number) => Promise<void>;
   now?: () => number;
   loadProject?: (projectId: number) => GitHubProject | undefined;
+  authMode?: () => GitHubAuthMode;
+  resolveRepositoryAuth?: (projectId: number, action: GitHubAction) => Promise<GitHubRepositoryAuth>;
+  loadAppIdentity?: () => Promise<GitHubAppMetadata>;
+  ghConfigDir?: string;
+}
+
+interface GitHubCommandContext {
+  key: string;
+  options?: RunCommandOptions;
 }
 
 interface CommandFailure extends Error {
@@ -250,8 +271,13 @@ export class GitHubClient {
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly now: () => number;
   private readonly loadProject: (projectId: number) => GitHubProject | undefined;
+  private readonly authMode: () => GitHubAuthMode;
+  private readonly resolveRepositoryAuth: (projectId: number, action: GitHubAction) => Promise<GitHubRepositoryAuth>;
+  private readonly loadAppIdentity: () => Promise<GitHubAppMetadata>;
+  private readonly configuredGhConfigDir: string | undefined;
+  private ghConfigDir: string | undefined;
   private readonly inFlightReads = new Map<string, Promise<unknown>>();
-  private rateLimitedUntil = 0;
+  private readonly rateLimitedUntil = new Map<string, number>();
 
   constructor(options: GitHubClientOptions = {}) {
     this.runner = options.runner ?? runCommand;
@@ -261,34 +287,51 @@ export class GitHubClient {
     this.sleep = options.sleep ?? sleep;
     this.now = options.now ?? Date.now;
     this.loadProject = options.loadProject ?? ((projectId) => projectsDb.getByIdAdmin(projectId));
+    this.authMode = options.authMode ?? getGitHubAuthMode;
+    this.resolveRepositoryAuth = options.resolveRepositoryAuth ?? getRepositoryAuth;
+    this.loadAppIdentity = options.loadAppIdentity ?? getGitHubAppMetadata;
+    this.configuredGhConfigDir = options.ghConfigDir;
   }
 
   async getSelf(): Promise<GitHubUser> {
-    return this.read<GitHubUser>('user');
+    if (this.authMode() === 'app') {
+      throw new GitHubClientError('GitHub App authentication has no current user', 'command_failed', {
+        endpoint: 'user',
+        retryable: false,
+      });
+    }
+    return this.read<GitHubUser>(null, 'user');
   }
 
-  async getIssue(project: GitHubProject, number: number): Promise<GitHubIssue>;
-  async getIssue(repo: string, number: number): Promise<GitHubIssue>;
-  async getIssue(repoOrProject: string | GitHubProject, number: number): Promise<GitHubIssue> {
-    const issue = await this.read<GitHubIssueResponse>(`${this.repoPath(this.repoOf(repoOrProject))}/issues/${number}`);
+  async getAppIdentity(): Promise<GitHubUser> {
+    const identity = await this.loadAppIdentity();
+    return { login: identity.botLogin, id: 0, type: 'Bot' };
+  }
+
+  getAuthMode(): GitHubAuthMode {
+    return this.authMode();
+  }
+
+  async getIssue(project: GitHubProject, number: number): Promise<GitHubIssue> {
+    const issue = await this.read<GitHubIssueResponse>(project, `${this.repoPath(this.repoOf(project))}/issues/${number}`);
     return this.mapIssue(issue);
   }
 
-  private async listIssueComments(repo: string, number: number): Promise<GitHubComment[]> {
-    const comments = await this.readPages<GitHubCommentResponse>(`${this.repoPath(repo)}/issues/${number}/comments`);
+  private async listIssueComments(project: GitHubProject, number: number): Promise<GitHubComment[]> {
+    const comments = await this.readPages<GitHubCommentResponse>(project, `${this.repoPath(this.repoOf(project))}/issues/${number}/comments`);
     return comments.map((comment) => this.mapComment(comment));
   }
 
   async getIssueComments(project: GitHubProject, number: number): Promise<GitHubComment[]> {
-    return this.listIssueComments(this.repoOf(project), number);
+    return this.listIssueComments(project, number);
   }
 
-  private async listIssueLabels(repo: string, number: number): Promise<GitHubLabel[]> {
-    return this.readPages<GitHubLabel>(`${this.repoPath(repo)}/issues/${number}/labels`);
+  private async listIssueLabels(project: GitHubProject, number: number): Promise<GitHubLabel[]> {
+    return this.readPages<GitHubLabel>(project, `${this.repoPath(this.repoOf(project))}/issues/${number}/labels`);
   }
 
   private async listIssuesByLabel(
-    repo: string,
+    project: GitHubProject,
     label: string,
     state: 'open' | 'closed' | 'all' = 'open',
     limit?: number,
@@ -296,10 +339,10 @@ export class GitHubClient {
     if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) return [];
     const perPage = limit === undefined ? 100 : Math.min(100, Math.floor(limit));
     const query = new URLSearchParams({ labels: label, state, per_page: String(perPage) });
-    const endpoint = `${this.repoPath(repo)}/issues?${query.toString()}`;
+    const endpoint = `${this.repoPath(this.repoOf(project))}/issues?${query.toString()}`;
     const issues = limit === undefined
-      ? await this.readPages<GitHubIssueResponse>(endpoint)
-      : await this.read<GitHubIssueResponse[]>(endpoint);
+      ? await this.readPages<GitHubIssueResponse>(project, endpoint)
+      : await this.read<GitHubIssueResponse[]>(project, endpoint);
     return issues.filter((issue) => !issue.pull_request).map((issue) => this.mapIssue(issue));
   }
 
@@ -307,8 +350,8 @@ export class GitHubClient {
     if (!Number.isFinite(limit) || limit <= 0) return [];
     const boundedLimit = Math.min(100, Math.floor(limit));
     const groups = labels.length > 0
-      ? await Promise.all(labels.map((label) => this.listIssuesByLabel(this.repoOf(project), label, 'open', boundedLimit)))
-      : [await this.listIssuesByLabel(this.repoOf(project), '', 'open', boundedLimit)];
+      ? await Promise.all(labels.map((label) => this.listIssuesByLabel(project, label, 'open', boundedLimit)))
+      : [await this.listIssuesByLabel(project, '', 'open', boundedLimit)];
     return [...new Map(groups.flat().map((issue) => [issue.number, issue])).values()].slice(0, boundedLimit);
   }
 
@@ -316,23 +359,21 @@ export class GitHubClient {
     if (!Number.isFinite(limit) || limit <= 0) return [];
     const boundedLimit = Math.min(100, Math.floor(limit));
     const query = new URLSearchParams({ state: 'open', per_page: String(boundedLimit) });
-    const pulls = await this.read<GitHubPullRequestResponse[]>(
+    const pulls = await this.read<GitHubPullRequestResponse[]>(project,
       `${this.repoPath(this.repoOf(project))}/pulls?${query.toString()}`,
     );
     return pulls.map((pull) => this.mapPullRequest(pull));
   }
 
-  async getPullRequest(project: GitHubProject, number: number): Promise<GitHubPullRequest>;
-  async getPullRequest(repo: string, number: number): Promise<GitHubPullRequest>;
-  async getPullRequest(repoOrProject: string | GitHubProject, number: number): Promise<GitHubPullRequest> {
-    const repo = this.repoOf(repoOrProject);
+  async getPullRequest(project: GitHubProject, number: number): Promise<GitHubPullRequest> {
+    const repo = this.repoOf(project);
     const path = `${this.repoPath(repo)}/pulls/${number}`;
-    const pull = await this.read<GitHubPullRequestResponse>(path);
+    const pull = await this.read<GitHubPullRequestResponse>(project, path);
     if (pull.state !== 'open') return this.mapPullRequest(pull);
     const [checks, evidence, comments] = await Promise.all([
-      this.getChecks(repo, pull.head.sha),
-      this.getReviewEvidence(repo, number),
-      this.listIssueComments(repo, number),
+      this.getChecks(project, pull.head.sha),
+      this.getReviewEvidence(project, number),
+      this.listIssueComments(project, number),
     ]);
     const linkedIssue = pull.body?.match(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i)?.[1];
     return {
@@ -351,29 +392,30 @@ export class GitHubClient {
 
   async findPullRequestForTaskBranch(project: GitHubProject, taskId: number): Promise<GitHubPullRequest | null> {
     const repo = this.repoOf(project);
-    const pulls = await this.read<GitHubPullRequestResponse[]>(`${this.repoPath(repo)}/pulls?state=open&per_page=100`);
+    const pulls = await this.read<GitHubPullRequestResponse[]>(project, `${this.repoPath(repo)}/pulls?state=open&per_page=100`);
     const prefix = `task/${taskId}-`;
     const pull = pulls.find((candidate) => candidate.head.ref === `task/${taskId}` || candidate.head.ref.startsWith(prefix));
     return pull ? this.mapPullRequest(pull) : null;
   }
 
-  private async getChecks(repo: string, ref: string): Promise<GitHubChecks> {
-    const path = this.repoPath(repo);
+  private async getChecks(project: GitHubProject, ref: string): Promise<GitHubChecks> {
+    const path = this.repoPath(this.repoOf(project));
     const encodedRef = encodeURIComponent(ref);
     const [runs, status] = await Promise.all([
-      this.read<{ check_runs: GitHubCheckRun[] }>(`${path}/commits/${encodedRef}/check-runs?per_page=100`),
-      this.read<{ sha: string; statuses: GitHubCommitStatus[] }>(`${path}/commits/${encodedRef}/status?per_page=100`),
+      this.read<{ check_runs: GitHubCheckRun[] }>(project, `${path}/commits/${encodedRef}/check-runs?per_page=100`),
+      this.read<{ sha: string; statuses: GitHubCommitStatus[] }>(project, `${path}/commits/${encodedRef}/status?per_page=100`),
     ]);
     return { sha: status.sha, checkRuns: runs.check_runs, statuses: status.statuses };
   }
 
-  async getReviewEvidence(repo: string, pullNumber: number): Promise<GitHubReviewEvidence> {
+  async getReviewEvidence(project: GitHubProject, pullNumber: number): Promise<GitHubReviewEvidence> {
+    const repo = this.repoOf(project);
     const path = `${this.repoPath(repo)}/pulls/${pullNumber}`;
     const [owner, name] = normalizeGitHubRepo(repo).split('/') as [string, string];
     const [reviews, comments, threadPages] = await Promise.all([
-      this.readPages<GitHubReview>(`${path}/reviews`),
-      this.readPages<GitHubReviewCommentResponse>(`${path}/comments`),
-      this.readGraphqlPages<GitHubReviewThreadsResponse>(REVIEW_THREADS_QUERY, {
+      this.readPages<GitHubReview>(project, `${path}/reviews`),
+      this.readPages<GitHubReviewCommentResponse>(project, `${path}/comments`),
+      this.readGraphqlPages<GitHubReviewThreadsResponse>(project, REVIEW_THREADS_QUERY, {
         owner,
         name,
         pullNumber,
@@ -452,7 +494,7 @@ export class GitHubClient {
     issueNumber: number,
     changes: { remove: string[]; add: string[] },
   ): Promise<void> {
-    const current = await this.listIssueLabels(this.repoOf(project), issueNumber);
+    const current = await this.listIssueLabels(project, issueNumber);
     const byLowerName = new Map(current.map((label) => [label.name.toLowerCase(), label.name]));
     for (const label of changes.remove) {
       const existing = byLowerName.get(label.toLowerCase());
@@ -501,12 +543,11 @@ export class GitHubClient {
     return `repos/${normalizeGitHubRepo(repo)}`;
   }
 
-  private repoOf(repoOrProject: string | GitHubProject): string {
-    if (typeof repoOrProject === 'string') return repoOrProject;
-    if (!repoOrProject.github_repo) {
+  private repoOf(project: GitHubProject): string {
+    if (!project.github_repo) {
       throw new GitHubClientError('Project has no GitHub repository', 'invalid_repository', { retryable: false });
     }
-    return repoOrProject.github_repo;
+    return project.github_repo;
   }
 
   private mapIssue(issue: GitHubIssueResponse): GitHubIssue {
@@ -549,19 +590,34 @@ export class GitHubClient {
     return `${this.repoPath(project.github_repo)}/${suffix}`;
   }
 
-  private async read<T>(endpoint: string): Promise<T> {
-    return this.deduplicate(`GET ${endpoint}`, () => this.request<T>(endpoint, 'GET'));
+  private async read<T>(project: GitHubProject | null, endpoint: string): Promise<T> {
+    if (this.authMode() === 'host') {
+      const context = { key: 'host' };
+      return this.deduplicate(`host GET ${endpoint}`, () => (
+        this.request<T>(project, endpoint, 'GET', undefined, false, context)
+      ));
+    }
+    const context = await this.commandContext(project, 'read');
+    return this.deduplicate(`${context.key} GET ${endpoint}`, () => (
+      this.request<T>(project, endpoint, 'GET', undefined, false, context)
+    ));
   }
 
-  private async readPages<T>(endpoint: string): Promise<T[]> {
-    return this.deduplicate(`GET pages ${endpoint}`, async () => {
-      const pages = await this.request<T[][]>(endpoint, 'GET', undefined, true);
+  private async readPages<T>(project: GitHubProject, endpoint: string): Promise<T[]> {
+    const context = await this.commandContext(project, 'read');
+    return this.deduplicate(`${context.key} GET pages ${endpoint}`, async () => {
+      const pages = await this.request<T[][]>(project, endpoint, 'GET', undefined, true, context);
       return pages.flat();
     });
   }
 
-  private async readGraphqlPages<T>(query: string, variables: Record<string, string | number>): Promise<T[]> {
-    const key = `GraphQL ${query} ${JSON.stringify(variables)}`;
+  private async readGraphqlPages<T>(
+    project: GitHubProject,
+    query: string,
+    variables: Record<string, string | number>,
+  ): Promise<T[]> {
+    const context = await this.commandContext(project, 'read');
+    const key = `${context.key} GraphQL ${query} ${JSON.stringify(variables)}`;
     return this.deduplicate(key, async () => {
       const endpoint = 'graphql';
       const args = ['api', 'graphql', '--paginate', '--slurp', '--raw-field', `query=${query}`];
@@ -569,7 +625,7 @@ export class GitHubClient {
         args.push(typeof value === 'number' ? '--field' : '--raw-field', `${name}=${value}`);
       }
 
-      return this.execute<T[]>(endpoint, args, this.maxAttempts);
+      return this.execute<T[]>(endpoint, args, this.maxAttempts, context);
     });
   }
 
@@ -590,14 +646,17 @@ export class GitHubClient {
   ): Promise<T> {
     const freshProject = this.loadProject(project.id);
     assertCapability(freshProject ?? { ...project, github_automation_enabled: 0 }, action);
-    return this.request<T>(this.repoEndpoint(freshProject!, suffix), method, body);
+    const context = await this.commandContext(freshProject!, action);
+    return this.request<T>(freshProject!, this.repoEndpoint(freshProject!, suffix), method, body, false, context);
   }
 
   private async request<T>(
+    project: GitHubProject | null,
     endpoint: string,
     method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
     body?: Record<string, unknown>,
     paginate = false,
+    existingContext?: GitHubCommandContext,
   ): Promise<T> {
     const args = ['api', '--method', method, endpoint, '--header', 'Accept: application/vnd.github+json'];
     if (paginate) args.push('--paginate', '--slurp');
@@ -619,20 +678,31 @@ export class GitHubClient {
       }
     }
 
-    return this.execute<T>(endpoint, args, method === 'GET' ? this.maxAttempts : 1);
+    const context = existingContext ?? await this.commandContext(project, 'read');
+    return this.execute<T>(endpoint, args, method === 'GET' ? this.maxAttempts : 1, context);
   }
 
-  private async execute<T>(endpoint: string, args: string[], attempts: number): Promise<T> {
-    this.assertCircuitOpen(endpoint);
+  private async execute<T>(
+    endpoint: string,
+    args: string[],
+    attempts: number,
+    context: GitHubCommandContext,
+  ): Promise<T> {
+    this.assertCircuitOpen(endpoint, context.key);
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
-        const result = await this.runner('gh', args);
+        const result = context.options
+          ? await this.runner('gh', args, context.options)
+          : await this.runner('gh', args);
         return this.parseJson<T>(result.stdout, endpoint);
       } catch (cause) {
         if (cause instanceof GitHubClientError) throw cause;
         const error = this.classifyFailure(cause, endpoint, attempt);
         if (error.kind === 'rate_limited') {
-          this.rateLimitedUntil = error.details.rateLimitResetAt ?? (this.now() + this.rateLimitFallbackMs);
+          this.rateLimitedUntil.set(
+            context.key,
+            error.details.rateLimitResetAt ?? (this.now() + this.rateLimitFallbackMs),
+          );
           throw error;
         }
         if (!error.details.retryable || attempt === attempts) throw error;
@@ -654,12 +724,13 @@ export class GitHubClient {
     }
   }
 
-  private assertCircuitOpen(endpoint: string): void {
-    if (this.rateLimitedUntil > this.now()) {
+  private assertCircuitOpen(endpoint: string, contextKey: string): void {
+    const rateLimitedUntil = this.rateLimitedUntil.get(contextKey) ?? 0;
+    if (rateLimitedUntil > this.now()) {
       throw new GitHubClientError('GitHub requests are paused by the rate-limit circuit breaker', 'rate_limited', {
         endpoint,
         retryable: false,
-        rateLimitResetAt: this.rateLimitedUntil,
+        rateLimitResetAt: rateLimitedUntil,
       });
     }
   }
@@ -703,6 +774,34 @@ export class GitHubClient {
     const retryAfter = stderr.match(/retry-after:\s*(\d+)/i)?.[1];
     if (retryAfter) return this.now() + (Number(retryAfter) * 1_000);
     return undefined;
+  }
+
+  private async commandContext(
+    project: GitHubProject | null,
+    action: GitHubAction,
+  ): Promise<GitHubCommandContext> {
+    if (this.authMode() === 'host') return { key: 'host' };
+    if (!project) {
+      throw new GitHubClientError('GitHub App requests require project repository context', 'invalid_repository', {
+        retryable: false,
+      });
+    }
+    const auth = await this.resolveRepositoryAuth(project.id, action);
+    return {
+      key: `app:${auth.installationId}:${auth.repositoryId}`,
+      options: {
+        env: {
+          GH_TOKEN: auth.token,
+          GH_CONFIG_DIR: this.isolatedGhConfigDir(),
+        },
+      },
+    };
+  }
+
+  private isolatedGhConfigDir(): string {
+    if (this.configuredGhConfigDir) return this.configuredGhConfigDir;
+    this.ghConfigDir ??= fs.mkdtempSync(path.join(os.tmpdir(), 'bottega-gh-'));
+    return this.ghConfigDir;
   }
 }
 

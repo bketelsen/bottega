@@ -21,6 +21,7 @@ import {
   normalizeGitHubRepo,
 } from './client.js';
 import { githubIdentity, isBottegaComment } from './identity.js';
+import { recoverPrAgentRunFinalizations } from './finalize.js';
 import { hasGitHubPrTriggerMention } from './trigger.js';
 
 const PLAN_LABEL = 'Needs Refinement';
@@ -494,6 +495,7 @@ export async function syncTaskPullRequest(taskId: number, prNumber?: number): Pr
 export async function reconcileRepository(projectId: number): Promise<void> {
   const project = projectForAutomation(projectId);
   if (!project) return;
+  await recoverPrAgentRunFinalizations(projectId);
   const issues = await githubClient.listOpenIssues(project, [PLAN_LABEL, APPROVED_LABEL], 100);
   const prioritized = [...issues].sort((a, b) => Number(hasLabel(b, 'Priority')) - Number(hasLabel(a, 'Priority')));
   for (const issue of prioritized) {

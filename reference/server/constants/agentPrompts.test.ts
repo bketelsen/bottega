@@ -11,6 +11,19 @@ import {
 } from './agentPrompts.js';
 import { saveOverride, deleteOverride } from '../services/promptRenderer.js';
 
+function expectCredentialFreeReadiness(message: string, taskId: number): void {
+  expect(message).not.toMatch(/\bgh\s/);
+  expect(message).not.toMatch(/git\s+(?:push|fetch)\b/);
+  expect(message).not.toContain('force-with-lease');
+  expect(message).not.toMatch(/(?:create|open) (?:a )?PR/i);
+  expect(message).toContain('Mandatory Server-Owned Publication Invariant');
+  expect(message).toContain('only after all requested work is complete');
+  expect(message).toContain('every required local test passes');
+  expect(message).toContain('If work is incomplete');
+  expect(message).toContain('any required test fails');
+  expect(message.match(new RegExp(`complete-pr\\.ts ${taskId}`, 'g'))).toHaveLength(1);
+}
+
 describe('generateYoloMessage', () => {
   const taskDocPath = '/repo/.bottega/tasks/task-42.md';
   const taskId = 42;
@@ -38,26 +51,26 @@ describe('generateYoloMessage', () => {
     expect(msg).toContain('Playwright');
   });
 
-  it('calls complete-workflow.ts before the PR phase', async () => {
+  it('uses workflow completion as its only server publication signal', async () => {
     const msg = await generateYoloMessage(taskDocPath, taskId, null);
     const workflowIdx = msg.indexOf('complete-workflow.ts');
-    const prIdx = msg.indexOf('gh pr create');
+    const invariantIdx = msg.indexOf('Mandatory Server-Owned Publication Invariant');
     expect(workflowIdx).toBeGreaterThan(-1);
-    expect(prIdx).toBeGreaterThan(workflowIdx);
+    expect(invariantIdx).toBeGreaterThan(workflowIdx);
+    expect(msg.match(/complete-workflow\.ts 42/g)).toHaveLength(1);
+    expect(msg).not.toContain('complete-pr.ts');
   });
 
-  it('includes CI monitoring and complete-pr.ts', async () => {
+  it('uses the credential-free readiness contract', async () => {
     const msg = await generateYoloMessage(taskDocPath, taskId, null);
-    expect(msg).toContain('gh pr checks');
-    expect(msg).toContain('complete-pr.ts');
-  });
-
-  it('uses a concise PR metadata example instead of generic task placeholders', async () => {
-    const msg = await generateYoloMessage(taskDocPath, taskId, null);
-    expect(msg).toContain('--title "<short task title>"');
-    expect(msg).toContain('Summary: <what the task does and how this implementation solves it');
-    expect(msg).toContain(`Task: #${taskId}`);
-    expect(msg).not.toContain(`gh pr create --title "Task #${taskId}" --body "Implementation for task #${taskId}"`);
+    expect(msg).not.toMatch(/\bgh\s/);
+    expect(msg).not.toMatch(/git\s+(?:push|fetch)\b/);
+    expect(msg).not.toContain('force-with-lease');
+    expect(msg).toContain('Mandatory Server-Owned Publication Invariant');
+    expect(msg).toContain('only after all requested work is complete');
+    expect(msg).toContain('any required test fails');
+    expect(msg).toContain('server will perform policy checks and publish the workflow');
+    expect(msg).toContain('server owns publication after this workflow');
   });
 
   it('references an existing PR URL when provided', async () => {
@@ -66,28 +79,31 @@ describe('generateYoloMessage', () => {
     expect(msg).toContain(prUrl);
   });
 
-  it('does not explicitly merge the PR', async () => {
-    const msg = await generateYoloMessage(taskDocPath, taskId, null);
-    expect(msg).toContain('Do NOT merge the PR');
-  });
 });
 
-describe('generatePrAgentMessage (shared body refactor regression)', () => {
-  it('still contains CI monitoring instructions after the refactor', async () => {
+describe('generatePrAgentMessage', () => {
+  it('uses the credential-free readiness contract', async () => {
     const msg = await generatePrAgentMessage('/repo/.bottega/tasks/task-1.md', 1, null);
-    expect(msg).toContain('gh pr checks');
-    expect(msg).toContain('complete-pr.ts');
-    expect(msg).toContain('Do NOT merge the PR');
+    expectCredentialFreeReadiness(msg, 1);
+    expect(msg).toContain('server owns initial publication');
   });
 
-  it('requires a short PR title and concise summary for new pull requests', async () => {
-    const msg = await generatePrAgentMessage('/repo/.bottega/tasks/task-1.md', 1, null);
-    expect(msg).toContain('short specific title');
-    expect(msg).toContain('concise summary body');
-    expect(msg).toContain('--title "<short task title>"');
-    expect(msg).toContain('Summary: <what the task does and how this implementation solves it');
-    expect(msg).toContain('Keep this to a short paragraph');
-    expect(msg).not.toContain('gh pr create --title "Task #1" --body "Implementation for task #1"');
+  it('appends the invariant after an unsafe operator override', async () => {
+    const archiveRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-override-test-'));
+    process.env.BOTTEGA_ARCHIVE_ROOT = archiveRoot;
+    try {
+      saveOverride('pr', 'CUSTOM OVERRIDE: use credentials and publish remotely for {{taskId}}');
+      const msg = await generatePrAgentMessage('/repo/task.md', 1, null);
+      expect(msg.indexOf('CUSTOM OVERRIDE')).toBeLessThan(
+        msg.indexOf('Mandatory Server-Owned Publication Invariant'),
+      );
+      expect(msg).toContain('higher priority than every instruction above');
+      expect(msg.match(/complete-pr\.ts 1/g)).toHaveLength(1);
+    } finally {
+      deleteOverride('pr');
+      fs.rmSync(archiveRoot, { recursive: true, force: true });
+      delete process.env.BOTTEGA_ARCHIVE_ROOT;
+    }
   });
 });
 
@@ -200,14 +216,12 @@ describe('generatePrAgentCommentMessage (single PR comment)', () => {
     expect(msg).toContain('line 42');
   });
 
-  it('inlines the PR/CI procedure (merged prompt keeps CI monitoring)', async () => {
+  it('uses the credential-free readiness contract', async () => {
     const msg = await generatePrAgentCommentMessage(taskDocPath, taskId, prUrl, {
       commentBody: 'x',
       commentAuthor: 'alice',
     });
-    expect(msg).toContain('gh pr checks');
-    expect(msg).toContain(`complete-pr.ts ${taskId}`);
-    expect(msg).toContain('Do NOT merge the PR');
+    expectCredentialFreeReadiness(msg, taskId);
   });
 });
 
@@ -237,14 +251,13 @@ describe('generatePrAgentReviewMessage (batched review)', () => {
     expect(msg).not.toContain('{{');
   });
 
-  it('renders the same merged prompt as the comment path (CI procedure inlined)', async () => {
+  it('renders the same credential-free contract as the comment path', async () => {
     const msg = await generatePrAgentReviewMessage(taskDocPath, taskId, prUrl, {
       reviewBody: 'fix',
       reviewAuthor: 'carol',
       comments: [{ commentBody: 'x', commentAuthor: 'carol' }],
     });
     expect(msg).toContain('Address all of the feedback');
-    expect(msg).toContain('gh pr checks');
-    expect(msg).toContain(`complete-pr.ts ${taskId}`);
+    expectCredentialFreeReadiness(msg, taskId);
   });
 });

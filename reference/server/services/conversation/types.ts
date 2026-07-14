@@ -9,6 +9,8 @@ import type { Provider } from '@shared/providers/types';
 
 export type { BroadcastFn, BroadcastToTaskSubscribersFn, PermissionMode, Provider };
 
+export type ProviderTerminationOutcome = 'success' | 'aborted' | 'error';
+
 export interface ConversationImage {
   data: string;
   mimeType: string;
@@ -76,5 +78,5 @@ export interface LifecycleHooks {
   onSessionId?: ((sessionId: string) => void | Promise<void>) | undefined;
   onAssistant?: ((query: unknown) => void) | undefined;
   onResult?: ((result: unknown) => Promise<void>) | undefined;
-  onComplete?: ((err: Error | null) => Promise<void>) | undefined;
+  onComplete?: ((outcome: ProviderTerminationOutcome) => Promise<void>) | undefined;
 }

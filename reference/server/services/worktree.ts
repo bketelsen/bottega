@@ -2,6 +2,12 @@ import path from 'path';
 import fs from 'fs';
 import { runCommand } from './shell.js';
 import { assertValidBranchName } from './validators.js';
+import {
+  resolveTrustedGitHubAuth,
+  runGitHubCli,
+  runRemoteGit,
+  type GitHubExecutionContext,
+} from './github/gitAuth.js';
 
 /**
  * Derive the worktree path for a task based on convention
@@ -182,6 +188,26 @@ export interface CreateWorktreeResult {
 
 export interface CreateWorktreeOptions {
   existingBranch?: string;
+  projectId?: number;
+  auth?: GitHubExecutionContext['auth'];
+  localOnly?: boolean;
+}
+
+async function configureWorktreeBotIdentity(
+  repoPath: string,
+  worktreePath: string,
+  auth: NonNullable<GitHubExecutionContext['auth']>,
+): Promise<void> {
+  await runCommand('git', ['config', 'extensions.worktreeConfig', 'true'], { cwd: repoPath });
+  await runCommand('git', ['config', '--worktree', 'user.name', auth.botLogin], { cwd: worktreePath });
+  await runCommand('git', ['config', '--worktree', 'user.email', auth.botEmail], { cwd: worktreePath });
+  const [{ stdout: name }, { stdout: email }] = await Promise.all([
+    runCommand('git', ['config', '--worktree', '--get', 'user.name'], { cwd: worktreePath }),
+    runCommand('git', ['config', '--worktree', '--get', 'user.email'], { cwd: worktreePath }),
+  ]);
+  if (name.trim() !== auth.botLogin || email.trim() !== auth.botEmail) {
+    throw new Error('Failed to verify worktree-local GitHub App bot identity');
+  }
 }
 
 /**
@@ -203,11 +229,19 @@ export async function createWorktree(
     await fs.promises.mkdir(worktreesDir, { recursive: true });
 
     const validatedBranch = assertValidBranchName(branch);
+    const executionContext: GitHubExecutionContext = {
+      ...(options.projectId === undefined ? {} : { projectId: options.projectId }),
+      ...(options.auth ? { auth: options.auth } : {}),
+    };
+    const auth = options.localOnly
+      ? null
+      : await resolveTrustedGitHubAuth(repoPath, executionContext, 'read');
+    const trustedContext = auth ? { auth } : executionContext;
     if (options.existingBranch) {
       const remoteRef = assertValidBranchName(`origin/${validatedBranch}`, 'remote branch ref');
       const refspec = `+refs/heads/${validatedBranch}:refs/remotes/origin/${validatedBranch}`;
       try {
-        await runCommand('git', ['fetch', 'origin', refspec], { cwd: repoPath });
+        await runRemoteGit(repoPath, ['fetch', 'origin', refspec], trustedContext, 'read');
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(
@@ -225,11 +259,13 @@ export async function createWorktree(
 
       // Branch off the remote tip when available, but preserve offline task creation.
       let baseRef = defaultBranch;
-      try {
-        await runCommand('git', ['fetch', 'origin', defaultBranch], { cwd: repoPath });
-        baseRef = assertValidBranchName(`origin/${defaultBranch}`, 'base ref');
-      } catch {
-        /* offline or no remote — fall back to the local default branch */
+      if (!options.localOnly) {
+        try {
+          await runRemoteGit(repoPath, ['fetch', 'origin', defaultBranch], trustedContext, 'read');
+          baseRef = assertValidBranchName(`origin/${defaultBranch}`, 'base ref');
+        } catch {
+          /* authenticated but offline — fall back to the local default branch */
+        }
       }
 
       await runCommand(
@@ -238,6 +274,8 @@ export async function createWorktree(
         { cwd: repoPath },
       );
     }
+
+    if (auth) await configureWorktreeBotIdentity(repoPath, worktreePath, auth);
 
     const projectPath = subprojectPath ? path.join(worktreePath, subprojectPath) : worktreePath;
 
@@ -304,6 +342,7 @@ export interface WorktreeStatusResult {
 export async function getWorktreeStatus(
   repoPath: string,
   taskId: number,
+  context: GitHubExecutionContext = {},
 ): Promise<WorktreeStatusResult> {
   const worktreePath = getWorktreePath(repoPath, taskId);
 
@@ -314,7 +353,7 @@ export async function getWorktreeStatus(
     const mainBranch = assertValidBranchName(await getDefaultBranch(repoPath), 'default branch');
 
     try {
-      await runCommand('git', ['fetch', 'origin'], { cwd: worktreePath });
+      await runRemoteGit(worktreePath, ['fetch', 'origin'], context, 'read');
     } catch {
       /* ignore */
     }
@@ -369,13 +408,14 @@ export interface RebaseResult {
 export async function rebaseOnMain(
   repoPath: string,
   taskId: number,
+  context: GitHubExecutionContext = {},
 ): Promise<RebaseResult> {
   const worktreePath = getWorktreePath(repoPath, taskId);
 
   try {
     const mainBranch = assertValidBranchName(await getDefaultBranch(repoPath), 'default branch');
 
-    await runCommand('git', ['fetch', 'origin', mainBranch], { cwd: worktreePath });
+    await runRemoteGit(worktreePath, ['fetch', 'origin', mainBranch], context, 'read');
 
     try {
       await runCommand('git', ['rebase', `origin/${mainBranch}`], { cwd: worktreePath });
@@ -408,8 +448,9 @@ export async function rebaseOnMain(
 export async function syncWithMain(
   repoPath: string,
   taskId: number,
+  context: GitHubExecutionContext = {},
 ): Promise<RebaseResult> {
-  return rebaseOnMain(repoPath, taskId);
+  return rebaseOnMain(repoPath, taskId, context);
 }
 
 export interface CreatePRResult {
@@ -420,8 +461,9 @@ export interface CreatePRResult {
 
 export type GitHubEffectGuard = (action: 'push' | 'createPR') => void | Promise<void>;
 
-export interface GitHubEffectOptions {
+export interface GitHubEffectOptions extends GitHubExecutionContext {
   beforeEffect?: GitHubEffectGuard;
+  forceWithLeaseExpectedSha?: string;
 }
 
 /**
@@ -450,7 +492,7 @@ export async function createPullRequest(
       guardFailed = true;
       throw error;
     }
-    await runCommand('git', ['push', '-u', 'origin', branch], { cwd: worktreePath });
+    await runRemoteGit(worktreePath, ['push', '-u', 'origin', branch], options, 'push');
 
     // Title and body pass straight through as argv. No escaping needed —
     // shell metacharacters inside title/body are literal bytes here.
@@ -460,10 +502,11 @@ export async function createPullRequest(
       guardFailed = true;
       throw error;
     }
-    const { stdout } = await runCommand(
-      'gh',
+    const { stdout } = await runGitHubCli(
+      worktreePath,
       ['pr', 'create', '--title', title, '--body', body],
-      { cwd: worktreePath },
+      options,
+      'createPR',
     );
 
     return { success: true, url: stdout.trim() };
@@ -502,23 +545,26 @@ export interface PullRequestStatusResult {
 export async function getPullRequestStatus(
   repoPath: string,
   taskId: number,
+  context: GitHubExecutionContext = {},
 ): Promise<PullRequestStatusResult> {
   const worktreePath = getWorktreePath(repoPath, taskId);
 
   try {
-    const { stdout } = await runCommand(
-      'gh',
+    const { stdout } = await runGitHubCli(
+      worktreePath,
       ['pr', 'view', '--json', 'url,state,mergeable'],
-      { cwd: worktreePath },
+      context,
+      'read',
     );
     const prData = JSON.parse(stdout) as { url: string; state: string; mergeable: string };
 
     let ciStatus: CIStatus = { status: 'none', checks: [] };
     try {
-      const { stdout: checksOutput } = await runCommand(
-        'gh',
+      const { stdout: checksOutput } = await runGitHubCli(
+        worktreePath,
         ['pr', 'checks', '--json', 'bucket,name,state,link'],
-        { cwd: worktreePath },
+        context,
+        'read',
       );
       const checks = JSON.parse(checksOutput) as CICheck[];
 
@@ -563,6 +609,7 @@ export async function getPullRequestStatus(
 export async function mergeAndCleanup(
   repoPath: string,
   taskId: number,
+  context: GitHubExecutionContext = {},
 ): Promise<RemoveWorktreeResult> {
   const worktreePath = getWorktreePath(repoPath, taskId);
 
@@ -574,7 +621,7 @@ export async function mergeAndCleanup(
     let lastMergeError: Error | null = null;
     for (let mergeAttempt = 0; mergeAttempt < 3 && !merged; mergeAttempt++) {
       try {
-        await runCommand('gh', ['pr', 'merge', '--merge'], { cwd: worktreePath });
+        await runGitHubCli(worktreePath, ['pr', 'merge', '--merge'], context, 'merge');
         merged = true;
       } catch (mergeError) {
         lastMergeError = mergeError instanceof Error ? mergeError : new Error(String(mergeError));
@@ -585,7 +632,7 @@ export async function mergeAndCleanup(
         if (is502 || isMergeInProgress) {
           await new Promise((resolve) => setTimeout(resolve, 5000));
           try {
-            await runCommand('git', ['fetch', 'origin'], { cwd: worktreePath });
+            await runRemoteGit(worktreePath, ['fetch', 'origin'], context, 'merge');
             const { stdout: branchHead } = await runCommand('git', ['rev-parse', 'HEAD'], {
               cwd: worktreePath,
             });
@@ -622,7 +669,7 @@ export async function mergeAndCleanup(
     }
 
     await runCommand('git', ['checkout', mainBranch], { cwd: repoPath });
-    await runCommand('git', ['pull'], { cwd: repoPath });
+    await runRemoteGit(repoPath, ['pull'], context, 'merge');
 
     return { success: true };
   } catch (error) {
@@ -701,6 +748,9 @@ export async function pushChanges(
   let guardFailed = false;
 
   try {
+    const auth = await resolveTrustedGitHubAuth(worktreePath, options, 'push');
+    if (auth) await configureWorktreeBotIdentity(repoPath, worktreePath, auth);
+    const trustedContext = auth ? { ...options, auth } : options;
     const { stdout: status } = await runCommand('git', ['status', '--porcelain'], {
       cwd: worktreePath,
     });
@@ -721,7 +771,15 @@ export async function pushChanges(
       guardFailed = true;
       throw error;
     }
-    await runCommand('git', ['push', 'origin', branch], { cwd: worktreePath });
+    const pushArgs = ['push'];
+    if (options.forceWithLeaseExpectedSha) {
+      if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(options.forceWithLeaseExpectedSha)) {
+        throw new Error('force-with-lease expected SHA must be a full 40- or 64-character object ID');
+      }
+      pushArgs.push(`--force-with-lease=refs/heads/${branch}:${options.forceWithLeaseExpectedSha}`);
+    }
+    pushArgs.push('origin', branch);
+    await runRemoteGit(worktreePath, pushArgs, trustedContext, 'push');
 
     return { success: true };
   } catch (error) {

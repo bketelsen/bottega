@@ -4,7 +4,7 @@
 // notification fired for any task conversation.
 //
 // Built as a hook factory matching the createContextUsageTracker pattern:
-// `buildAgentRunCompletionHandler(ctx)` returns `(isError) => Promise<void>`
+// `buildAgentRunCompletionHandler(ctx)` returns `(outcome) => Promise<void>`
 // suitable for composition into a streaming loop's `onComplete` hook.
 //
 // `handleAgentChaining` uses dynamic `await import('../agentRunner.js')` —
@@ -12,50 +12,34 @@
 // module, so a static import would create a load-time cycle. Keep it
 // dynamic.
 
-import { tasksDb, agentRunsDb, projectsDb, userDb } from '../../database/db.js';
-import { can } from '../github/capabilities.js';
+import { tasksDb, agentRunsDb, userDb } from '../../database/db.js';
 import { worktreeExists } from '../worktree.js';
 import { notifyClaudeComplete } from '../notifications.js';
-import type { StreamingContext } from './types.js';
+import type { ProviderTerminationOutcome, StreamingContext } from './types.js';
 import type { AgentType } from '@shared/websocket/messages';
 
 // Maximum number of agent iterations before auto-blocking (prevents infinite loops).
 // Only affects automatic agent chaining, not manual conversations.
 export const MAX_WORKFLOW_RUNS = 25;
 
-function githubPrAutomationAllowed(taskId: number): boolean {
-  const task = tasksDb.getById(taskId);
-  if (!task?.github_issue_number && !task?.github_pr_number) return true;
-  const project = projectsDb.getByIdAdmin(task.project_id);
-  return Boolean(project && can(project, 'push') && can(project, 'createPR'));
-}
-
 /**
  * Build an `onComplete` handler for a streaming session. The returned
  * function:
  * 1. Looks up any linked agent run for this conversation.
- *    - If `status === 'running'`: the loop exited normally → mark
- *      `'completed'`, broadcast, and chain to the next agent.
+ *    - If `status === 'running'`: persist the provider's authoritative
+ *      outcome, completing and chaining only on success.
  *    - If `status === 'failed'`: the user already clicked Stop (which writes
  *      this synchronously in `abortSession`) → no-op. Don't chain.
  *    - Any other status: shouldn't happen at runtime; log and stop.
  * 2. Fires a push notification for any task conversation (whether or not
  *    there's a linked agent run).
  *
- * **There is intentionally no `isError` parameter.** Failure is determined
- * by what's already in the DB (set deterministically by `abortSession` on
- * user-Stop or by the orphan-recovery sweep on server restart), not by a
- * boolean derived from how the streaming loop exited. Catastrophic SDK
- * errors land here as "status was still 'running' → mark 'completed' →
- * chain", and the next agent in the loop reads the synthetic error
- * message left in the conversation transcript and decides whether to retry.
- *
  * No-op if `ctx.taskId` is not set.
  */
 export function buildAgentRunCompletionHandler(
   ctx: StreamingContext,
-): () => Promise<void> {
-  return async function onAgentRunComplete(): Promise<void> {
+): (outcome: ProviderTerminationOutcome) => Promise<void> {
+  return async function onAgentRunComplete(outcome): Promise<void> {
     const { conversationId, taskId, userId, broadcastToTaskSubscribersFn } = ctx;
     if (!taskId) return;
 
@@ -68,53 +52,69 @@ export function buildAgentRunCompletionHandler(
       const { id: agentRunId, agent_type: agentType, status } = linkedAgentRun;
 
       if (status === 'running') {
-        agentRunsDb.updateStatus(agentRunId, 'completed');
-        console.log(`[ConversationAdapter] Agent run ${agentRunId} (${agentType}) completed`);
+        const nextStatus = outcome === 'success' ? 'completed' : 'failed';
+        agentRunsDb.updateStatus(agentRunId, nextStatus);
+        console.log(`[ConversationAdapter] Agent run ${agentRunId} (${agentType}) ${nextStatus}`);
 
         if (broadcastToTaskSubscribersFn) {
           broadcastToTaskSubscribersFn(taskId, {
             type: 'agent-run-updated',
             agentRun: {
               id: agentRunId,
-              status: 'completed',
+              status: nextStatus,
               agent_type: agentType,
               conversation_id: conversationId,
             },
           });
         }
 
-        let githubPlanningTerminal = false;
-        const completedTask = tasksDb.getById(taskId);
-        if (agentType === 'planification' && completedTask?.github_issue_number) {
-          githubPlanningTerminal = true;
-          if (completedTask.planification_complete) {
+        if (outcome === 'success') {
+          let githubPlanningTerminal = false;
+          const completedTask = tasksDb.getById(taskId);
+          if (agentType === 'planification' && completedTask?.github_issue_number) {
+            githubPlanningTerminal = true;
+            if (completedTask.planification_complete) {
+              try {
+                const { syncPlannedTaskToGitHub } = await import('../github/reconcile.js');
+                await syncPlannedTaskToGitHub(taskId);
+              } catch (err) {
+                console.error(`[ConversationAdapter] Failed to sync planned task ${taskId} to GitHub:`, err);
+              }
+            }
+          } else if (agentType === 'pr') {
             try {
-              const { syncPlannedTaskToGitHub } = await import('../github/reconcile.js');
-              await syncPlannedTaskToGitHub(taskId);
+              const { finalizePrAgentRun } = await import('../github/finalize.js');
+              const result = await finalizePrAgentRun(taskId, agentRunId);
+              if (!result.success && !result.skipped) {
+                console.error(`[ConversationAdapter] Failed to finalize task ${taskId} PR: ${result.error}`);
+              }
             } catch (err) {
-              console.error(`[ConversationAdapter] Failed to sync planned task ${taskId} to GitHub:`, err);
+              console.error(`[ConversationAdapter] Failed to finalize task ${taskId} PR:`, err);
+            }
+          } else if (agentType === 'yolo' && completedTask?.workflow_complete) {
+            try {
+              const { ensureTaskPullRequest } = await import('../prService.js');
+              const result = await ensureTaskPullRequest(taskId);
+              if (!result.success) {
+                console.error(`[ConversationAdapter] Failed to publish YOLO task ${taskId}: ${result.error}`);
+              }
+            } catch (err) {
+              console.error(`[ConversationAdapter] Failed to publish YOLO task ${taskId}:`, err);
             }
           }
-        } else if (agentType === 'pr') {
-          try {
-            const { syncTaskPullRequest } = await import('../github/reconcile.js');
-            await syncTaskPullRequest(taskId);
-          } catch (err) {
-            console.error(`[ConversationAdapter] Failed to sync task ${taskId} PR link:`, err);
-          }
-        }
 
-        // Chain implementation/review/refinement, plus planification for
-        // non-technical owners (handleAgentChaining decides per-owner).
-        // GitHub-backed planning and the PR agent are terminal here: GitHub
-        // approval/reconciliation owns their next transition.
-        if (
-          (agentType === 'planification' && !githubPlanningTerminal) ||
-          agentType === 'implementation' ||
-          agentType === 'review' ||
-          agentType === 'refinement'
-        ) {
-          shouldChain = true;
+          // Chain implementation/review/refinement, plus planification for
+          // non-technical owners (handleAgentChaining decides per-owner).
+          // GitHub-backed planning and the PR agent are terminal here: GitHub
+          // approval/reconciliation owns their next transition.
+          if (
+            (agentType === 'planification' && !githubPlanningTerminal) ||
+            agentType === 'implementation' ||
+            agentType === 'review' ||
+            agentType === 'refinement'
+          ) {
+            shouldChain = true;
+          }
         }
       } else {
         // status='failed' (user aborted) is the expected non-running case.
@@ -223,16 +223,16 @@ async function handleAgentChaining(
       const hasWorktree = await worktreeExists(taskWithProject.repo_folder_path, taskId);
 
       if (hasWorktree) {
-        console.log(`[ConversationAdapter] Starting PR agent for task ${taskId}`);
-        const { startAgentRun } = await import('../agentRunner.js');
-        setTimeout(async () => {
-          try {
-            if (!githubPrAutomationAllowed(taskId)) return;
-            await startAgentRun(taskId, 'pr', { broadcastFn, broadcastToTaskSubscribersFn, userId });
-          } catch (err) {
-            console.error(`[ConversationAdapter] Failed to start PR agent:`, err);
+        console.log(`[ConversationAdapter] Publishing initial PR for task ${taskId}`);
+        try {
+          const { ensureTaskPullRequest } = await import('../prService.js');
+          const result = await ensureTaskPullRequest(taskId);
+          if (!result.success) {
+            console.error(`[ConversationAdapter] Failed to publish initial PR for task ${taskId}: ${result.error}`);
           }
-        }, 1000);
+        } catch (err) {
+          console.error(`[ConversationAdapter] Failed to publish initial PR for task ${taskId}:`, err);
+        }
         return;
       }
     }

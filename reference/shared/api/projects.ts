@@ -21,6 +21,11 @@ export type GetProjectResponse = ProjectRow;
 
 export type ProjectAutonomyTier = AutonomyTier;
 
+export interface ProjectReadinessErrorResponse {
+  error: string;
+  code: string;
+}
+
 export interface CreateProjectRequest {
   name: string;
   repoFolderPath: string;

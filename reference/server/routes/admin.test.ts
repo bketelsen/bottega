@@ -35,7 +35,12 @@ vi.mock('../database/db.js', () => ({
   }
 }));
 
+vi.mock('../services/github/appAuth.js', () => ({
+  getGitHubAppHealth: vi.fn(),
+}));
+
 import { userDb, projectsDb, projectMembersDb } from '../database/db.js';
+import { getGitHubAppHealth } from '../services/github/appAuth.js';
 
 describe('Admin Routes', () => {
   let app: import("express").Application;
@@ -43,6 +48,7 @@ describe('Admin Routes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.GITHUB_AUTH_MODE;
 
     app = express();
     app.use(express.json());
@@ -69,6 +75,46 @@ describe('Admin Routes', () => {
       expect(res.status).toBe(200);
       expect(res.body).toEqual(mockUsers);
       expect(userDb.getAllUsers).toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/admin/github-app/health', () => {
+    it('returns GitHub App health without exposing credentials', async () => {
+      vi.mocked(getGitHubAppHealth).mockResolvedValue({
+        mode: 'app',
+        status: 'healthy',
+        configured: true,
+        appId: 123,
+        appSlug: 'bottega',
+        botLogin: 'bottega[bot]',
+        botUserId: 456,
+        webhookConfigured: true,
+        webhookUrl: 'https://example.test/api/webhooks/github',
+        lastMetadataSuccessAt: 1,
+        lastTokenMintSuccessAt: null,
+        errorCode: null,
+        error: null,
+      });
+      const res = await request(app).get('/api/admin/github-app/health');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ mode: 'app', status: 'healthy', appSlug: 'bottega' });
+    });
+
+    it('returns a stable health object for constructor-time configuration errors', async () => {
+      process.env.GITHUB_AUTH_MODE = 'app';
+      vi.mocked(getGitHubAppHealth).mockRejectedValue(Object.assign(
+        new Error('Private key is invalid'),
+        { code: 'GITHUB_APP_KEY_INVALID' },
+      ));
+      const res = await request(app).get('/api/admin/github-app/health');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        mode: 'app',
+        status: 'error',
+        configured: false,
+        errorCode: 'GITHUB_APP_KEY_INVALID',
+      });
+      delete process.env.GITHUB_AUTH_MODE;
     });
   });
 

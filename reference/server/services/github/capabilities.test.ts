@@ -9,7 +9,7 @@ import {
   type GitHubProject,
 } from './capabilities.js';
 
-const actions: GitHubAction[] = ['comment', 'label', 'reaction', 'createIssue', 'push', 'createPR', 'merge'];
+const actions: GitHubAction[] = ['read', 'comment', 'label', 'reaction', 'createIssue', 'push', 'createPR', 'merge'];
 
 function project(tier: AutonomyTier, enabled: 0 | 1 = 1): GitHubProject {
   return {
@@ -25,6 +25,8 @@ function project(tier: AutonomyTier, enabled: 0 | 1 = 1): GitHubProject {
     created_at: '2026-01-01',
     updated_at: '2026-01-01',
     github_repo: 'owner/repo',
+    github_repository_id: 100,
+    github_installation_id: 10,
     github_automation_enabled: enabled,
     autonomy_tier: tier,
   };
@@ -32,9 +34,9 @@ function project(tier: AutonomyTier, enabled: 0 | 1 = 1): GitHubProject {
 
 describe('GitHub capability firewall', () => {
   it.each([
-    ['advisory', ['comment', 'label', 'reaction']],
-    ['issues', ['comment', 'label', 'reaction', 'createIssue']],
-    ['pr', ['comment', 'label', 'reaction', 'createIssue', 'push', 'createPR']],
+    ['advisory', ['read', 'comment', 'label', 'reaction']],
+    ['issues', ['read', 'comment', 'label', 'reaction', 'createIssue']],
+    ['pr', ['read', 'comment', 'label', 'reaction', 'createIssue', 'push', 'createPR']],
     ['automerge', actions],
   ] as const)('%s allows the expected cumulative actions', (tier, allowed) => {
     for (const action of actions) {
@@ -42,10 +44,10 @@ describe('GitHub capability firewall', () => {
     }
   });
 
-  it('denies every action when automation is disabled or the repository is absent', () => {
+  it('allows repository reads without automation but denies all actions without a repository', () => {
     const noRepo = { ...project('automerge'), github_repo: null };
     for (const action of actions) {
-      expect(can(project('automerge', 0), action)).toBe(false);
+      expect(can(project('automerge', 0), action)).toBe(action === 'read');
       expect(can(noRepo, action)).toBe(false);
     }
   });

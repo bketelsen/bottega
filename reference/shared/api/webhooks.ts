@@ -13,7 +13,8 @@ import { expectType } from './_common';
 export interface WebhookAcceptedResponse {
   status: 'accepted';
   event: string;
-  repository: string;
+  repository?: string;
+  delivery: string;
 }
 
 export interface WebhookIgnoredResponse {
@@ -47,5 +48,6 @@ expectType<GitHubWebhookResponse>({
   status: 'accepted',
   event: 'issues',
   repository: 'owner/repo',
+  delivery: 'delivery-id',
 });
 expectType<GitHubWebhookResponse>({ status: 'ignored' });

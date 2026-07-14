@@ -8,7 +8,11 @@ describe('GitHubIdentity', () => {
     const getSelf = vi.fn()
       .mockReturnValueOnce(first)
       .mockResolvedValue({ login: 'bottega-owner', id: 1, type: 'User' });
-    const identity = new GitHubIdentity({ getSelf });
+    const identity = new GitHubIdentity({
+      getAuthMode: () => 'host',
+      getAppIdentity: vi.fn(),
+      getSelf,
+    });
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const failedA = identity.resolveLogin();
@@ -21,6 +25,20 @@ describe('GitHubIdentity', () => {
     await expect(identity.resolveLogin()).resolves.toBe('bottega-owner');
     expect(getSelf).toHaveBeenCalledTimes(2);
     warning.mockRestore();
+  });
+
+  it('uses the App bot identity without querying the authenticated user', async () => {
+    const getSelf = vi.fn();
+    const getAppIdentity = vi.fn().mockResolvedValue({ login: 'bottega[bot]', id: 99, type: 'Bot' });
+    const identity = new GitHubIdentity({
+      getAuthMode: () => 'app',
+      getAppIdentity,
+      getSelf,
+    });
+
+    await expect(identity.resolveLogin()).resolves.toBe('bottega[bot]');
+    expect(getAppIdentity).toHaveBeenCalledOnce();
+    expect(getSelf).not.toHaveBeenCalled();
   });
 });
 

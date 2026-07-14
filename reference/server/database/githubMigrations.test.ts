@@ -1,7 +1,11 @@
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { enforceGitHubIdentityConstraints } from './githubMigrations.js';
+import {
+  enforceGitHubIdentityConstraints,
+  migrateGitHubAppProjectIdentity,
+  migrateGitHubFinalizationRuns,
+} from './githubMigrations.js';
 
 describe('enforceGitHubIdentityConstraints', () => {
   let database: Database.Database;
@@ -120,5 +124,127 @@ describe('enforceGitHubIdentityConstraints', () => {
     expect(database.prepare(
       `SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_projects_github_repo'`,
     ).get()).toBeUndefined();
+  });
+});
+
+describe('migrateGitHubAppProjectIdentity', () => {
+  let database: Database.Database;
+
+  beforeEach(() => {
+    database = new Database(':memory:');
+    database.exec(`
+      CREATE TABLE projects (
+        id INTEGER PRIMARY KEY,
+        github_repository_id INTEGER,
+        github_installation_id INTEGER,
+        github_automation_enabled INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT
+      );
+    `);
+  });
+
+  afterEach(() => database.close());
+
+  it('quarantines repository ID collisions and creates the partial unique index', () => {
+    database.exec(`
+      INSERT INTO projects VALUES
+        (1, 100, 10, 1, '2026-01-01'),
+        (2, 100, 20, 1, '2026-01-02'),
+        (3, 200, 10, 1, '2026-01-03');
+    `);
+    const warn = vi.fn();
+
+    migrateGitHubAppProjectIdentity(database, warn);
+    migrateGitHubAppProjectIdentity(database, warn);
+
+    expect(database.prepare(
+      `SELECT id, github_repository_id, github_installation_id, github_automation_enabled
+       FROM projects ORDER BY id`,
+    ).all()).toEqual([
+      { id: 1, github_repository_id: 100, github_installation_id: 10, github_automation_enabled: 1 },
+      { id: 2, github_repository_id: null, github_installation_id: null, github_automation_enabled: 0 },
+      { id: 3, github_repository_id: 200, github_installation_id: 10, github_automation_enabled: 1 },
+    ]);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(() => database.exec(
+      `INSERT INTO projects VALUES (4, 100, 30, 1, '2026-01-04')`,
+    )).toThrow(/UNIQUE/);
+    expect(() => database.exec(
+      `INSERT INTO projects VALUES (5, NULL, NULL, 0, '2026-01-05')`,
+    )).not.toThrow();
+  });
+
+  it('adds both columns to a legacy table atomically', () => {
+    database.exec(`
+      DROP TABLE projects;
+      CREATE TABLE projects (
+        id INTEGER PRIMARY KEY,
+        github_automation_enabled INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT
+      );
+    `);
+    migrateGitHubAppProjectIdentity(database);
+
+    const columns = database.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+    expect(columns.map(({ name }) => name)).toEqual([
+      'id',
+      'github_automation_enabled',
+      'created_at',
+      'github_repository_id',
+      'github_installation_id',
+    ]);
+  });
+
+  it('rolls back column additions if the migration cannot complete', () => {
+    database.exec('DROP TABLE projects; CREATE TABLE projects (id INTEGER PRIMARY KEY, created_at TEXT)');
+
+    expect(() => migrateGitHubAppProjectIdentity(database)).toThrow(/github_automation_enabled/);
+    const columns = database.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+    expect(columns.map(({ name }) => name)).toEqual(['id', 'created_at']);
+    expect(database.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'index' AND name = 'idx_projects_github_repository_id'`,
+    ).get()).toBeUndefined();
+  });
+});
+
+describe('migrateGitHubFinalizationRuns', () => {
+  let database: Database.Database;
+
+  beforeEach(() => {
+    database = new Database(':memory:');
+    database.exec(`
+      CREATE TABLE task_agent_runs (
+        id INTEGER PRIMARY KEY,
+        github_finalize_head_sha TEXT
+      );
+      INSERT INTO task_agent_runs (id, github_finalize_head_sha) VALUES (1, 'legacy-sha');
+    `);
+  });
+
+  afterEach(() => database.close());
+
+  it('finishes a partial migration without replacing existing data and is idempotent', () => {
+    migrateGitHubFinalizationRuns(database);
+    migrateGitHubFinalizationRuns(database);
+
+    expect(database.prepare('PRAGMA table_info(task_agent_runs)').all()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'github_finalize_status', dflt_value: "'none'", notnull: 1 }),
+        expect.objectContaining({ name: 'github_finalize_head_sha' }),
+        expect.objectContaining({ name: 'github_finalize_error' }),
+        expect.objectContaining({ name: 'github_finalize_started_at' }),
+      ]),
+    );
+    expect(database.prepare('SELECT * FROM task_agent_runs WHERE id = 1').get()).toEqual({
+      id: 1,
+      github_finalize_head_sha: 'legacy-sha',
+      github_finalize_status: 'none',
+      github_finalize_error: null,
+      github_finalize_started_at: null,
+    });
+    expect(() => database.prepare(
+      `UPDATE task_agent_runs SET github_finalize_status = 'invalid' WHERE id = 1`,
+    ).run()).toThrow(/CHECK/);
   });
 });

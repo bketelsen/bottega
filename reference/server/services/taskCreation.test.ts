@@ -112,8 +112,17 @@ describe('createTaskWithWorkspace', () => {
     });
 
     expect(createWorktree).toHaveBeenCalledWith(
-      '/repo', 7, 'Repair PR', null, { existingBranch: 'feature/original-pr' },
+      '/repo', 7, 'Repair PR', null, { existingBranch: 'feature/original-pr', projectId: 3 },
     );
+  });
+
+  it('threads project context into new-branch worktree creation', async () => {
+    vi.mocked(isGitRepository).mockResolvedValue(true);
+    vi.mocked(createWorktree).mockResolvedValue({ success: true });
+
+    await createTaskWithWorkspace({ project, userId: 5, title: 'Task' });
+
+    expect(createWorktree).toHaveBeenCalledWith('/repo', 7, 'Task', null, { projectId: 3 });
   });
 
   it('rolls back the task when worktree creation fails', async () => {

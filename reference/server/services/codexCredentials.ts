@@ -13,6 +13,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import { isolateProviderGitHubEnv } from './credentials/providerEnvironment.js';
+
 const DEFAULT_CODEX_CONFIG_ROOT = path.join(
   os.homedir(),
   '.config',
@@ -320,5 +322,8 @@ export function buildCodexSdkEnv(
   };
   removeInheritedCodexAuthEnv(env);
   env['CODEX_HOME'] = resolveCodexHomeDir(userId);
-  return env as CodexSdkEnv;
+  return isolateProviderGitHubEnv(
+    env,
+    path.join(resolveCodexHomeDir(userId), 'gh'),
+  ) as CodexSdkEnv;
 }

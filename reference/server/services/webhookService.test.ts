@@ -1,37 +1,77 @@
 import crypto from 'crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  parseGitHubWebhookDelivery,
+  type GitHubSupportedEvent,
+} from '../../shared/schemas/webhooks.js';
 
 const mocks = vi.hoisted(() => ({
   getProject: vi.fn(),
   getSetting: vi.fn(),
   getSelf: vi.fn(),
+  getAuthMode: vi.fn(),
+  getAppIdentity: vi.fn(),
   refinement: vi.fn(),
   approved: vi.fn(),
   pullRequest: vi.fn(),
+  getAllProjects: vi.fn(),
+  updateProject: vi.fn(),
+  updateIdentity: vi.fn(),
+  invalidateInstallation: vi.fn(),
 }));
 
 vi.mock('../database/db.js', () => ({
-  projectsDb: { getByGithubRepo: mocks.getProject },
+  projectsDb: {
+    getByGithubRepo: mocks.getProject,
+    getAllAdmin: mocks.getAllProjects,
+    update: mocks.updateProject,
+    updateGitHubIdentity: mocks.updateIdentity,
+  },
   appSettingsDb: { getValue: mocks.getSetting },
 }));
 vi.mock('./github/client.js', () => ({
-  githubClient: { getSelf: mocks.getSelf },
+  githubClient: {
+    getSelf: mocks.getSelf,
+    getAuthMode: mocks.getAuthMode,
+    getAppIdentity: mocks.getAppIdentity,
+  },
 }));
 vi.mock('./github/reconcile.js', () => ({
   reconcileRefinementIssue: mocks.refinement,
   reconcileApprovedIssue: mocks.approved,
   reconcilePullRequest: mocks.pullRequest,
 }));
+vi.mock('./github/appAuth.js', () => ({
+  invalidateInstallation: mocks.invalidateInstallation,
+}));
 
 import {
   drainGitHubWebhooks,
-  dispatchGitHubWebhook,
+  dispatchGitHubWebhook as dispatchValidatedGitHubWebhook,
   isBottegaComment,
-  queueGitHubWebhook,
+  queueGitHubWebhook as queueValidatedGitHubWebhook,
   resetWebhookServiceForTests,
   stopAcceptingGitHubWebhooks,
   validateGitHubWebhookSignature,
 } from './webhookService.js';
+
+function validatedDelivery(event: GitHubSupportedEvent, payload: unknown) {
+  const result = parseGitHubWebhookDelivery(
+    event,
+    payload,
+    process.env.GITHUB_AUTH_MODE === 'app',
+  );
+  if (!result.success) throw result.error;
+  return result.data;
+}
+
+function dispatchGitHubWebhook(event: GitHubSupportedEvent, payload: unknown): Promise<void> {
+  return dispatchValidatedGitHubWebhook(validatedDelivery(event, payload));
+}
+
+function queueGitHubWebhook(event: GitHubSupportedEvent, payload: unknown): boolean {
+  return queueValidatedGitHubWebhook(validatedDelivery(event, payload));
+}
 
 describe('webhook service', () => {
   beforeEach(() => {
@@ -43,10 +83,13 @@ describe('webhook service', () => {
       github_automation_enabled: 1,
     });
     mocks.getSelf.mockResolvedValue({ login: 'bottega-host', id: 1, type: 'User' });
+    mocks.getAuthMode.mockReturnValue('host');
     mocks.getSetting.mockReturnValue('bottega');
     mocks.refinement.mockResolvedValue(undefined);
     mocks.approved.mockResolvedValue(undefined);
     mocks.pullRequest.mockResolvedValue(undefined);
+    mocks.getAllProjects.mockReturnValue([]);
+    delete process.env.GITHUB_AUTH_MODE;
   });
 
   it('validates HMAC-SHA256 without normalizing payload bytes', () => {
@@ -191,6 +234,138 @@ describe('webhook service', () => {
       repository: { full_name: 'org/repo' },
     });
     expect(mocks.pullRequest).not.toHaveBeenCalledWith(7, 10);
+  });
+
+  it('matches app deliveries by repository and installation IDs', async () => {
+    process.env.GITHUB_AUTH_MODE = 'app';
+    mocks.getAllProjects.mockReturnValue([{
+      id: 7,
+      user_id: 1,
+      github_repo: 'org/repo',
+      github_repository_id: 100,
+      github_installation_id: 10,
+      github_automation_enabled: 1,
+    }]);
+    await dispatchGitHubWebhook('issues', {
+      action: 'opened',
+      issue: { number: 12 },
+      installation: { id: 10 },
+      repository: { id: 100, full_name: 'org/repo' },
+    });
+    expect(mocks.refinement).toHaveBeenCalledWith(7, 12);
+
+    await dispatchGitHubWebhook('issues', {
+      action: 'opened',
+      issue: { number: 13 },
+      installation: { id: 11 },
+      repository: { id: 100, full_name: 'org/repo' },
+    });
+    expect(mocks.refinement).not.toHaveBeenCalledWith(7, 13);
+  });
+
+  it('uses name fallback only for unverified migration rows and persists identity', async () => {
+    process.env.GITHUB_AUTH_MODE = 'app';
+    mocks.getAllProjects.mockReturnValue([{
+      id: 7,
+      user_id: 1,
+      github_repo: 'org/repo',
+      github_repository_id: null,
+      github_installation_id: null,
+      github_automation_enabled: 1,
+    }]);
+    await dispatchGitHubWebhook('issues', {
+      action: 'opened',
+      issue: { number: 12 },
+      installation: { id: 10 },
+      repository: { id: 100, full_name: 'org/repo' },
+    });
+    expect(mocks.updateIdentity).toHaveBeenCalledWith(7, 'org/repo', 100, 10);
+  });
+
+  it('invalidates auth and preserves automation intent while installation access is degraded', async () => {
+    const project = {
+      id: 7,
+      user_id: 1,
+      github_repository_id: 100,
+      github_installation_id: 10,
+      github_automation_enabled: 1,
+    };
+    mocks.getAllProjects.mockReturnValue([project]);
+    await dispatchGitHubWebhook('installation', {
+      action: 'suspended',
+      installation: { id: 10 },
+    });
+    expect(mocks.invalidateInstallation).toHaveBeenCalledWith(10);
+    expect(mocks.updateProject).not.toHaveBeenCalled();
+
+    process.env.GITHUB_AUTH_MODE = 'app';
+    await dispatchGitHubWebhook('issues', {
+      action: 'opened',
+      issue: { number: 12 },
+      installation: { id: 10 },
+      repository: { id: 100, full_name: 'org/repo' },
+    });
+    expect(mocks.refinement).not.toHaveBeenCalled();
+
+    await dispatchGitHubWebhook('installation', {
+      action: 'unsuspended',
+      installation: { id: 10 },
+    });
+    await dispatchGitHubWebhook('issues', {
+      action: 'opened',
+      issue: { number: 12 },
+      installation: { id: 10 },
+      repository: { id: 100, full_name: 'org/repo' },
+    });
+    expect(mocks.refinement).toHaveBeenCalledWith(7, 12);
+
+    mocks.updateProject.mockClear();
+    await dispatchGitHubWebhook('installation_repositories', {
+      action: 'removed',
+      installation: { id: 10 },
+      repositories_added: [],
+      repositories_removed: [{ id: 100, full_name: 'org/repo' }],
+    });
+    expect(mocks.updateProject).not.toHaveBeenCalled();
+
+    await dispatchGitHubWebhook('issues', {
+      action: 'opened',
+      issue: { number: 13 },
+      installation: { id: 10 },
+      repository: { id: 100, full_name: 'org/repo' },
+    });
+    expect(mocks.refinement).not.toHaveBeenCalledWith(7, 13);
+
+    await dispatchGitHubWebhook('installation_repositories', {
+      action: 'added',
+      installation: { id: 10 },
+      repositories_added: [{ id: 100, full_name: 'org/repo' }],
+      repositories_removed: [],
+    });
+    await dispatchGitHubWebhook('issues', {
+      action: 'opened',
+      issue: { number: 13 },
+      installation: { id: 10 },
+      repository: { id: 100, full_name: 'org/repo' },
+    });
+    expect(mocks.refinement).toHaveBeenCalledWith(7, 13);
+  });
+
+  it('updates a renamed repository by its stable ID', async () => {
+    mocks.getAllProjects.mockReturnValue([{
+      id: 7,
+      user_id: 1,
+      github_repo: 'org/old',
+      github_repository_id: 100,
+      github_installation_id: 10,
+      github_automation_enabled: 1,
+    }]);
+    await dispatchGitHubWebhook('repository', {
+      action: 'renamed',
+      installation: { id: 10 },
+      repository: { id: 100, full_name: 'org/new' },
+    });
+    expect(mocks.updateIdentity).toHaveBeenCalledWith(7, 'org/new', 100, 10);
   });
 
   it('tracks accepted deferred work for shutdown and stops new dispatch', async () => {

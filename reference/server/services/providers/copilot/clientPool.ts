@@ -20,6 +20,7 @@
 import { CopilotClient } from '@github/copilot-sdk';
 
 import {
+  buildCopilotRuntimeEnv,
   readCopilotToken,
   resolveCopilotHomeDir,
 } from '../../copilotCredentials.js';
@@ -53,6 +54,7 @@ export type CreateClientFn = (args: {
   userId: number;
   gitHubToken: string;
   baseDirectory: string;
+  env: Record<string, string | undefined>;
 }) => CopilotClient;
 
 interface PoolDeps {
@@ -62,10 +64,11 @@ interface PoolDeps {
   now: () => number;
 }
 
-const defaultCreateClient: CreateClientFn = ({ gitHubToken, baseDirectory }) =>
+const defaultCreateClient: CreateClientFn = ({ gitHubToken, baseDirectory, env }) =>
   new CopilotClient({
     gitHubToken,
     baseDirectory,
+    env,
     logLevel: 'error',
   });
 
@@ -187,6 +190,7 @@ class CopilotClientPool {
       userId,
       gitHubToken: token,
       baseDirectory,
+      env: buildCopilotRuntimeEnv(userId),
     });
     await client.start();
     const now = this.deps.now();
