@@ -132,6 +132,27 @@ describe('generatePlanificationMessage', () => {
       expect(msg).toContain(taskDocPath);
       expect(msg).toContain(String(taskId));
       expect(msg).not.toContain('{{');
+      expect(msg).not.toContain('/home/ubuntu/bottega');
+      expect(msg).toMatch(/tsx "[^"]+\/scripts\/complete-plan\.ts" 42/);
+      expect(msg).toContain('Mandatory Planning Completion Invariant');
+    }
+  });
+
+  it('appends the runtime completion command after an operator override', async () => {
+    const archiveRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-override-test-'));
+    process.env.BOTTEGA_ARCHIVE_ROOT = archiveRoot;
+    try {
+      saveOverride('planification', 'CUSTOM PLANNING OVERRIDE for {{taskId}}');
+      const msg = await generatePlanificationMessage(taskDocPath, taskId);
+      expect(msg.indexOf('CUSTOM PLANNING OVERRIDE')).toBeLessThan(
+        msg.indexOf('Mandatory Planning Completion Invariant'),
+      );
+      expect(msg).toContain('higher priority than every instruction above');
+      expect(msg).toMatch(/tsx "[^"]+\/scripts\/complete-plan\.ts" 42/);
+    } finally {
+      deleteOverride('planification');
+      fs.rmSync(archiveRoot, { recursive: true, force: true });
+      delete process.env.BOTTEGA_ARCHIVE_ROOT;
     }
   });
 

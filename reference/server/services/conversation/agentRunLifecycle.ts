@@ -52,9 +52,18 @@ export function buildAgentRunCompletionHandler(
       const { id: agentRunId, agent_type: agentType, status } = linkedAgentRun;
 
       if (status === 'running') {
-        const nextStatus = outcome === 'success' ? 'completed' : 'failed';
+        const completedTask = tasksDb.getById(taskId);
+        const missingPlanningSignal = outcome === 'success'
+          && agentType === 'planification'
+          && !completedTask?.planification_complete;
+        const nextStatus = outcome === 'success' && !missingPlanningSignal ? 'completed' : 'failed';
         agentRunsDb.updateStatus(agentRunId, nextStatus);
         console.log(`[ConversationAdapter] Agent run ${agentRunId} (${agentType}) ${nextStatus}`);
+        if (missingPlanningSignal) {
+          console.error(
+            `[ConversationAdapter] Planning run ${agentRunId} ended without the required completion signal`,
+          );
+        }
 
         if (broadcastToTaskSubscribersFn) {
           broadcastToTaskSubscribersFn(taskId, {
@@ -68,9 +77,8 @@ export function buildAgentRunCompletionHandler(
           });
         }
 
-        if (outcome === 'success') {
+        if (outcome === 'success' && !missingPlanningSignal) {
           let githubPlanningTerminal = false;
-          const completedTask = tasksDb.getById(taskId);
           if (agentType === 'planification' && completedTask?.github_issue_number) {
             githubPlanningTerminal = true;
             if (completedTask.planification_complete) {

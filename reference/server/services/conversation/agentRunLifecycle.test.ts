@@ -173,7 +173,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(agentRunsDb.getByTask).mockReturnValue([
       { id: 9, conversation_id: 100, agent_type: 'planification', status: 'running' }
     ] as never);
-    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 0 } as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 0, planification_complete: 1 } as never);
     vi.mocked(tasksDb.getWithProject).mockReturnValue({ repo_folder_path: '/r', user_id: 1 } as never);
     vi.mocked(userDb.getUserById).mockReturnValue({ id: 1, is_technical: 1 } as never);
 
@@ -188,7 +188,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(agentRunsDb.getByTask).mockReturnValue([
       { id: 9, conversation_id: 100, agent_type: 'planification', status: 'running' }
     ] as never);
-    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 0 } as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 0, planification_complete: 1 } as never);
     vi.mocked(tasksDb.getWithProject).mockReturnValue({ repo_folder_path: '/r', user_id: 1 } as never);
     vi.mocked(userDb.getUserById).mockReturnValue({ id: 1, is_technical: 0 } as never);
 
@@ -219,7 +219,7 @@ describe('buildAgentRunCompletionHandler', () => {
     expect(startAgentRun).not.toHaveBeenCalled();
   });
 
-  it.each([0, undefined])('does not publish or chain GitHub-backed planning when completion is %s', async (planificationComplete) => {
+  it.each([0, undefined])('fails planning without its completion signal when completion is %s', async (planificationComplete) => {
     const c = ctx();
     vi.mocked(agentRunsDb.getByTask).mockReturnValue([
       { id: 9, conversation_id: 100, agent_type: 'planification', status: 'running' }
@@ -238,6 +238,11 @@ describe('buildAgentRunCompletionHandler', () => {
 
     expect(syncPlannedTaskToGitHub).not.toHaveBeenCalled();
     expect(startAgentRun).not.toHaveBeenCalled();
+    expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(9, 'failed');
+    expect(c.broadcastToTaskSubscribersFn).toHaveBeenCalledWith(7, {
+      type: 'agent-run-updated',
+      agentRun: { id: 9, status: 'failed', agent_type: 'planification', conversation_id: 100 },
+    });
   });
 
   it('finalizes a ready PR run when its successful lifecycle completes', async () => {
@@ -258,7 +263,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(agentRunsDb.getByTask).mockReturnValue([
       { id: 9, conversation_id: 100, agent_type: 'planification', status: 'running' }
     ] as never);
-    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 0 } as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 0, planification_complete: 1 } as never);
     vi.mocked(tasksDb.getWithProject).mockReturnValue({ repo_folder_path: '/r', user_id: 1 } as never);
     vi.mocked(userDb.getUserById).mockImplementation(((id: number) =>
       id === 2 ? { id: 2, is_technical: 0 } : { id: 1, is_technical: 1 }) as never);
@@ -276,7 +281,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(agentRunsDb.getByTask).mockReturnValue([
       { id: 9, conversation_id: 100, agent_type: 'planification', status: 'running' }
     ] as never);
-    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 0 } as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 0, planification_complete: 1 } as never);
     vi.mocked(tasksDb.getWithProject).mockReturnValue({ repo_folder_path: '/r', user_id: 1 } as never);
     vi.mocked(userDb.getUserById).mockImplementation(((id: number) =>
       id === 2 ? { id: 2, is_technical: 1 } : { id: 1, is_technical: 0 }) as never);
@@ -293,7 +298,7 @@ describe('buildAgentRunCompletionHandler', () => {
     vi.mocked(agentRunsDb.getByTask).mockReturnValue([
       { id: 9, conversation_id: 100, agent_type: 'planification', status: 'running' }
     ] as never);
-    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 0 } as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 0, planification_complete: 1 } as never);
     vi.mocked(tasksDb.getWithProject).mockReturnValue({ repo_folder_path: '/r', user_id: 5 } as never);
     vi.mocked(userDb.getUserById).mockReturnValue({ id: 5, is_technical: 0 } as never);
 

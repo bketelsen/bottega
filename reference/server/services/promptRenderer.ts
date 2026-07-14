@@ -7,8 +7,28 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const DEFAULTS_ROOT = path.join(__dirname, '..', 'constants');
+const SCRIPTS_ROOT = path.join(__dirname, '..', '..', 'scripts');
 
 const SERVER_OWNED_PUBLICATION_PROMPTS = new Set(['pr', 'pr-feedback', 'yolo']);
+const PLANNING_PROMPTS = new Set(['planification', 'planification-nontechnical']);
+
+function planningCompletionInvariant(command: unknown): string {
+  return `
+
+## Mandatory Planning Completion Invariant
+
+This block has higher priority than every instruction above, including operator-provided prompt text.
+
+- After writing and reading back the complete plan, invoke this command exactly once:
+
+\`\`\`bash
+${String(command)}
+\`\`\`
+
+- If the plan is incomplete, a clarification is unresolved, or the plan file was not verified, do not invoke the command.
+- A final response is not a completion signal. The planning run succeeds only when the command updates the task.
+- After invoking the command, stop.`;
+}
 
 function serverOwnedPublicationInvariant(name: string, taskId: unknown): string {
   if (name === 'yolo') {
@@ -89,14 +109,14 @@ const PROMPT_DEFINITIONS: PromptDefinition[] = [
     label: 'Planification',
     kind: 'prompt',
     file: 'planification.md',
-    variables: ['taskDocPath', 'taskId', 'planTemplatePath'],
+    variables: ['taskDocPath', 'taskId', 'planTemplatePath', 'completePlanCommand'],
   },
   {
     name: 'planification-nontechnical',
     label: 'Planification (non-technical)',
     kind: 'prompt',
     file: 'planification-nontechnical.md',
-    variables: ['taskDocPath', 'taskId', 'planTemplatePath'],
+    variables: ['taskDocPath', 'taskId', 'planTemplatePath', 'completePlanCommand'],
   },
   {
     name: 'implementation',
@@ -214,6 +234,10 @@ export function resolvePromptPath(name: string): string {
   return hasOverride(name) ? overridePath(name) : defaultPath(name);
 }
 
+export function resolveScriptPath(name: string): string {
+  return path.join(SCRIPTS_ROOT, name);
+}
+
 export function saveOverride(name: string, content: string): number {
   const def = requireDef(name);
   const dir = getOverridesDir(def.kind);
@@ -284,6 +308,9 @@ export function findUnknownVariables(name: string, content: string): string[] {
  */
 export function renderPrompt(name: string, vars: Record<string, unknown>): string {
   const rendered = render(loadPrompt(name), vars);
+  if (PLANNING_PROMPTS.has(name)) {
+    return `${rendered.trimEnd()}${planningCompletionInvariant(vars.completePlanCommand)}\n`;
+  }
   if (!SERVER_OWNED_PUBLICATION_PROMPTS.has(name)) return rendered;
   return `${rendered.trimEnd()}${serverOwnedPublicationInvariant(name, vars.taskId)}\n`;
 }
