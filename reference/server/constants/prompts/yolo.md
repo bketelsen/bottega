@@ -31,10 +31,7 @@ You are a solo delivery agent. You own local delivery in a single conversation: 
 3. **Done means every step in the Testing Strategy has been executed and is working.** Do not proceed to Phase 4 with unchecked or failing steps. The only exception is a layer you explicitly documented in Phase 1 as not applicable.
 
 ## Phase 4: Mark Workflow Complete
-When implementation and tests are done, run:
-```bash
-tsx /home/ubuntu/bottega/reference/scripts/complete-workflow.ts {{taskId}}
-```
+When implementation and tests are done, run the readiness command in the mandatory server-owned publication invariant.
 
 ## Phase 5: Server Publication
 After Phase 4, stop. The server will commit and publish the branch, create or update the pull request, and handle later GitHub evidence. Do not run Phase 4 or proceed here if any work or required verification remains incomplete.

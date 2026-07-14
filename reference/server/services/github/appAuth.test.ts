@@ -9,6 +9,7 @@ import type { ProjectRow } from '../../../shared/types/db.js';
 import {
   createGitHubAppAuthService,
   GitHubAppError,
+  validateGitHubAuthConfiguration,
 } from './appAuth.js';
 
 const NOW = Date.parse('2026-07-13T12:00:00Z');
@@ -122,6 +123,17 @@ describe('GitHub App auth broker', () => {
     expect(() => createGitHubAppAuthService({
       env: env({ NODE_ENV: 'production' }),
     })).toThrowError(expect.objectContaining({ code: 'GITHUB_APP_KEY_INVALID' }));
+  });
+
+  it('validates startup configuration and warns when legacy host mode is active', () => {
+    const warn = vi.fn();
+    expect(validateGitHubAuthConfiguration({ env: {}, warn })).toBe('host');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('deprecated'));
+
+    expect(() => validateGitHubAuthConfiguration({
+      env: { GITHUB_AUTH_MODE: 'app', GITHUB_APP_CLIENT_ID: 'Iv1.partial' },
+      warn,
+    })).toThrowError(expect.objectContaining({ code: 'GITHUB_APP_NOT_CONFIGURED' }));
   });
 
   it('requires the optional webhook URL and secret as a pair', () => {

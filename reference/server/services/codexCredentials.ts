@@ -216,17 +216,34 @@ export function clearCodexAuth(userId: number | string | undefined): boolean {
   }
 }
 
-function tryDecodeIdTokenEmail(idToken: string | undefined): string | undefined {
-  if (!idToken || typeof idToken !== 'string') return undefined;
-  const parts = idToken.split('.');
-  if (parts.length < 2) return undefined;
+interface JwtMetadata {
+  email?: string;
+  expiresAt?: string;
+  expired?: boolean;
+}
+
+function tryDecodeJwtMetadata(token: string | undefined): JwtMetadata {
+  if (!token || typeof token !== 'string') return {};
+  const parts = token.split('.');
+  if (parts.length < 2) return {};
   try {
+    // Diagnostics only: local claims are intentionally decoded without treating
+    // them as proof that OpenAI currently accepts the credential.
     const body = JSON.parse(
       Buffer.from(parts[1]!, 'base64url').toString('utf8'),
-    ) as { email?: unknown };
-    return typeof body.email === 'string' ? body.email : undefined;
+    ) as { email?: unknown; exp?: unknown };
+    const expiresAtSeconds = typeof body.exp === 'number' && Number.isFinite(body.exp)
+      ? body.exp
+      : undefined;
+    const expiresAt = expiresAtSeconds !== undefined
+      ? new Date(expiresAtSeconds * 1000).toISOString()
+      : undefined;
+    return {
+      ...(typeof body.email === 'string' ? { email: body.email } : {}),
+      ...(expiresAt ? { expiresAt, expired: expiresAtSeconds! * 1000 <= Date.now() } : {}),
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -243,6 +260,9 @@ export interface CodexAuthStatus {
   method?: 'oauth' | 'api_key';
   tokenFingerprint?: string;
   email?: string;
+  tokenExpiresAt?: string;
+  tokenExpired?: boolean;
+  refreshable?: boolean;
   reason?: string;
 }
 
@@ -253,14 +273,21 @@ export async function getCodexAuthStatus(
   try {
     const { payload } = readCodexAuth(userId);
     if (typeof payload.tokens?.access_token === 'string') {
+      const accessMetadata = tryDecodeJwtMetadata(payload.tokens.access_token);
+      const idMetadata = tryDecodeJwtMetadata(payload.tokens.id_token);
+      const expiryMetadata = accessMetadata.expiresAt ? accessMetadata : idMetadata;
       return {
         authenticated: true,
         status: 'authenticated',
         authPath,
         method: 'oauth',
         tokenFingerprint: fingerprint(payload.tokens.access_token),
-        ...(tryDecodeIdTokenEmail(payload.tokens.id_token) !== undefined
-          ? { email: tryDecodeIdTokenEmail(payload.tokens.id_token)! }
+        refreshable: typeof payload.tokens.refresh_token === 'string',
+        ...(idMetadata.email !== undefined
+          ? { email: idMetadata.email }
+          : {}),
+        ...(expiryMetadata.expiresAt !== undefined
+          ? { tokenExpiresAt: expiryMetadata.expiresAt, tokenExpired: expiryMetadata.expired }
           : {}),
       };
     }
@@ -271,6 +298,7 @@ export async function getCodexAuthStatus(
         authPath,
         method: 'api_key',
         tokenFingerprint: fingerprint(payload.OPENAI_API_KEY),
+        refreshable: false,
       };
     }
     return {

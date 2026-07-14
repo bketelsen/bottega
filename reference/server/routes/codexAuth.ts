@@ -81,6 +81,9 @@ router.get(
         method: status.method ?? null,
         email: status.email ?? null,
         tokenFingerprint: status.tokenFingerprint ?? null,
+        tokenExpiresAt: status.tokenExpiresAt ?? null,
+        tokenExpired: status.tokenExpired ?? null,
+        refreshable: status.refreshable ?? false,
         reason: status.authenticated ? null : (status.reason ?? null),
         login: activeLogin
           ? {

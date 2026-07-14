@@ -92,11 +92,17 @@ GITHUB_WEBHOOK_SECRET=<same-secret-configured-on-the-app>
 `BOTTEGA_EXTERNAL_URL` and `GITHUB_WEBHOOK_SECRET` are an optional pair. Omitting
 both leaves App authentication available in polling-only mode and reports
 degraded webhook health; configuring only one is an error. App configuration is
-read at startup and changes require a restart.
+read at startup and changes require a restart. Bottega validates the auth mode,
+App identifier, private key, key ownership/mode, and webhook pair before opening
+the HTTP listener. Invalid App configuration therefore fails startup instead of
+leaving automation to fail later.
 
 After restart, check **Admin > GitHub App** or request
 `GET /api/admin/github-app/health`. The response identifies configuration and
-permission problems without exposing the private key or installation tokens.
+permission problems without exposing the private key or installation tokens. It
+also reports the App and bot identity, last successful metadata check and token
+mint, and enabled projects that still lack a verified repository or installation
+ID.
 For each existing project, open GitHub automation settings and save or re-enable
 automation. This verifies the repository, discovers its installation, and
 persists canonical repository and installation IDs. A project is App-ready only
@@ -113,7 +119,8 @@ receive App credentials in either mode.
 To roll back during the compatibility period, set `GITHUB_AUTH_MODE=host`,
 restore the service account's host GitHub credentials, and restart. Do not
 delete stored repository or installation IDs; they can be reused after the App
-configuration is repaired.
+configuration is repaired. Host mode is deprecated and emits a warning at every
+startup; it remains only as a temporary rollback path.
 
 ## Project Configuration
 

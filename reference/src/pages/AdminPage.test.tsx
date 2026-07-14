@@ -45,6 +45,15 @@ describe('AdminPage GitHub App health', () => {
         lastTokenMintSuccessAt: null,
         errorCode: null,
         error: 'GitHub webhook is not configured',
+        projects: {
+          automationEnabled: 1,
+          ready: 0,
+          missingIdentity: [{
+            id: 7,
+            name: 'Needs setup',
+            missing: ['repository_id', 'installation_id'],
+          }],
+        },
       }),
     });
   });
@@ -55,6 +64,9 @@ describe('AdminPage GitHub App health', () => {
     fireEvent.click(screen.getByRole('button', { name: 'GitHub App' }));
     expect(await screen.findByText('App: bottega')).toBeInTheDocument();
     expect(screen.getByText('Webhook: not configured')).toBeInTheDocument();
+    expect(screen.getByText('Bot identity: bottega[bot]')).toBeInTheDocument();
+    expect(screen.getByText('Automation projects: 0/1 ready')).toBeInTheDocument();
+    expect(screen.getByText('Needs setup: missing repository_id, installation_id')).toBeInTheDocument();
     expect(screen.getByText('GitHub webhook is not configured')).toBeInTheDocument();
   });
 });

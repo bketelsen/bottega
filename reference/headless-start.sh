@@ -7,7 +7,6 @@
 # through environment variables (JWT_SECRET is required); a .env file is
 # optional here.
 set -euo pipefail
-export PATH="/usr/bin:$PATH"
 cd "$(dirname "$0")"
 
 echo "[headless-start] starting API-only server (no vite build, frontend disabled)..."

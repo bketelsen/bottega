@@ -70,6 +70,18 @@ export type GitHubAppHealthErrorCode =
   | 'GITHUB_APP_PERMISSION_MISSING'
   | 'GITHUB_APP_TOKEN_FAILED';
 
+export interface GitHubProjectIdentityIssue {
+  id: number;
+  name: string;
+  missing: Array<'repository' | 'repository_id' | 'installation_id'>;
+}
+
+export interface GitHubProjectReadiness {
+  automationEnabled: number;
+  ready: number;
+  missingIdentity: GitHubProjectIdentityIssue[];
+}
+
 export interface GitHubAppHealthResponse {
   mode: 'host' | 'app';
   status: 'disabled' | 'healthy' | 'degraded' | 'error';
@@ -84,6 +96,7 @@ export interface GitHubAppHealthResponse {
   lastTokenMintSuccessAt: number | null;
   errorCode: GitHubAppHealthErrorCode | null;
   error: string | null;
+  projects: GitHubProjectReadiness;
 }
 
 // Project member rows joined with user info — surfaced via the admin

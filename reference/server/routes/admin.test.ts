@@ -95,9 +95,36 @@ describe('Admin Routes', () => {
         errorCode: null,
         error: null,
       });
+      vi.mocked(projectsDb.getAllAdmin).mockReturnValue([
+        {
+          id: 7,
+          name: 'Ready',
+          github_repo: 'owner/ready',
+          github_repository_id: 70,
+          github_installation_id: 700,
+          github_automation_enabled: 1,
+        },
+        {
+          id: 8,
+          name: 'Needs setup',
+          github_repo: 'owner/setup',
+          github_repository_id: null,
+          github_installation_id: null,
+          github_automation_enabled: 1,
+        },
+      ] as never);
       const res = await request(app).get('/api/admin/github-app/health');
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ mode: 'app', status: 'healthy', appSlug: 'bottega' });
+      expect(res.body.projects).toEqual({
+        automationEnabled: 2,
+        ready: 1,
+        missingIdentity: [{
+          id: 8,
+          name: 'Needs setup',
+          missing: ['repository_id', 'installation_id'],
+        }],
+      });
     });
 
     it('returns a stable health object for constructor-time configuration errors', async () => {
@@ -106,6 +133,7 @@ describe('Admin Routes', () => {
         new Error('Private key is invalid'),
         { code: 'GITHUB_APP_KEY_INVALID' },
       ));
+      vi.mocked(projectsDb.getAllAdmin).mockReturnValue([]);
       const res = await request(app).get('/api/admin/github-app/health');
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({

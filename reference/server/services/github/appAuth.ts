@@ -91,7 +91,7 @@ interface TokenEntry {
   expiresAt: number;
 }
 
-interface GitHubAppAuthDependencies {
+export interface GitHubAppAuthDependencies {
   env?: NodeJS.ProcessEnv;
   fetch?: typeof globalThis.fetch;
   now?: () => number;
@@ -578,6 +578,18 @@ export function createGitHubAppAuthService(
     getHealth,
     invalidateInstallation,
   };
+}
+
+export function validateGitHubAuthConfiguration(
+  dependencies: GitHubAppAuthDependencies = {},
+): GitHubAuthMode {
+  const auth = createGitHubAppAuthService(dependencies);
+  if (auth.mode === 'host') {
+    (dependencies.warn ?? console.warn)(
+      '[GitHub] GITHUB_AUTH_MODE=host is deprecated; configure GitHub App mode for repository-scoped automation.',
+    );
+  }
+  return auth.mode;
 }
 
 let singleton: GitHubAppAuthService | null = null;
