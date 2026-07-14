@@ -8,7 +8,7 @@
 // flips the switch.
 
 import { Codex } from '@openai/codex-sdk';
-import type { Thread } from '@openai/codex-sdk';
+import type { CodexOptions, Thread } from '@openai/codex-sdk';
 
 import { mapEvent } from './mapEvent.js';
 import { buildCodexThreadOptions } from './codexOptionsBuilder.js';
@@ -26,6 +26,9 @@ interface ActiveCodexSession {
   thread: Thread;
   abortController: AbortController;
 }
+
+type CodexClient = Pick<Codex, 'startThread' | 'resumeThread'>;
+type CodexFactory = (options?: CodexOptions) => CodexClient;
 
 const ACTIVE_SESSIONS = new Map<string, ActiveCodexSession>();
 
@@ -78,11 +81,7 @@ async function* streamUnified(
 export class CodexProvider implements LlmProvider {
   readonly name = 'openai' as const;
 
-  private codex: Codex;
-
-  constructor(codex: Codex = new Codex()) {
-    this.codex = codex;
-  }
+  constructor(private readonly createCodex: CodexFactory = (options) => new Codex(options)) {}
 
   getCapabilities(): ProviderCapabilities {
     return getCapabilities('openai');
@@ -90,7 +89,7 @@ export class CodexProvider implements LlmProvider {
 
   async startTurn(options: ProviderRunOptions): Promise<ProviderRunResult> {
     const threadOptions = buildCodexThreadOptions(options);
-    const thread = this.codex.startThread(threadOptions);
+    const thread = this.codexFor(options).startThread(threadOptions);
     return this.runOnThread(thread, options);
   }
 
@@ -98,8 +97,18 @@ export class CodexProvider implements LlmProvider {
     options: ProviderRunOptions & { resumeSessionId: string },
   ): Promise<ProviderRunResult> {
     const threadOptions = buildCodexThreadOptions(options);
-    const thread = this.codex.resumeThread(options.resumeSessionId, threadOptions);
+    const thread = this.codexFor(options).resumeThread(options.resumeSessionId, threadOptions);
     return this.runOnThread(thread, options);
+  }
+
+  private codexFor(options: ProviderRunOptions): CodexClient {
+    if (!options.env) return this.createCodex();
+    const env = Object.fromEntries(
+      Object.entries(options.env).filter((entry): entry is [string, string] => (
+        typeof entry[1] === 'string'
+      )),
+    );
+    return this.createCodex({ env });
   }
 
   private async runOnThread(
