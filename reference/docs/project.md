@@ -70,6 +70,7 @@ This directory is organized by architectural concern. Pull whichever file matche
 | **[`authentication.md`](./authentication.md)** | App-level auth (JWT + per-user API keys, NOT Claude OAuth), `token_version` invalidation, rate limiting, the project-membership authorization model, admin panel, `is_technical`. |
 | **[`api-reference.md`](./api-reference.md)** | Flat lookup table of REST endpoints and WebSocket message types. Read the topical docs for the **why**; read this for the **shape**. |
 | **[`github-automation.md`](./github-automation.md)** | Configure and operate GitHub issue intake, autonomy tiers, PR feedback, webhooks, recovery polling, and safety controls. |
+| **[`github-app-service-identity-plan.md`](./github-app-service-identity-plan.md)** | Implemented architecture for replacing ambient host GitHub credentials with a repository-scoped GitHub App bot identity. |
 | **[`yeti-migration-plan.md`](./yeti-migration-plan.md)** | Historical implementation plan and architectural rationale for folding Yeti's GitHub automation into Bottega. |
 
 ## Tech stack

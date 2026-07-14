@@ -10,6 +10,8 @@ interface GitHubProjectSettingsProps {
   githubAutomationEnabled: boolean;
   onGithubAutomationEnabledChange: (value: boolean) => void;
   disabled?: boolean;
+  repositoryId?: number | null;
+  installationId?: number | null;
   className: string;
   titleClassName: string;
   repoInputClassName: string;
@@ -23,6 +25,8 @@ function GitHubProjectSettings({
   githubAutomationEnabled,
   onGithubAutomationEnabledChange,
   disabled = false,
+  repositoryId,
+  installationId,
   className,
   titleClassName,
   repoInputClassName,
@@ -70,6 +74,13 @@ function GitHubProjectSettings({
         />
         Enable GitHub automation
       </label>
+      {githubAutomationEnabled && (
+        <p className="text-xs text-muted-foreground" data-testid="github-project-health">
+          {repositoryId && installationId
+            ? `Verified GitHub App repository #${repositoryId} (installation #${installationId})`
+            : 'Repository verification is completed when these settings are saved.'}
+        </p>
+      )}
     </fieldset>
   );
 }

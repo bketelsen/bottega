@@ -5,6 +5,7 @@ import path from 'path';
 
 import {
   buildCopilotSdkEnv,
+  buildCopilotRuntimeEnv,
   clearCopilotAuth,
   getCopilotAuthStatus,
   readCopilotToken,
@@ -14,14 +15,29 @@ import {
 } from './copilotCredentials.js';
 
 let tmpRoot: string;
+const ISOLATED_ENV_KEYS = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+  'SSH_AUTH_SOCK',
+  'GH_CONFIG_DIR',
+] as const;
+const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-cred-'));
   process.env['COPILOT_CONFIG_ROOT'] = tmpRoot;
+  for (const key of ISOLATED_ENV_KEYS) savedEnv[key] = process.env[key];
 });
 
 afterEach(() => {
   delete process.env['COPILOT_CONFIG_ROOT'];
+  for (const key of ISOLATED_ENV_KEYS) {
+    const value = savedEnv[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -67,14 +83,27 @@ describe('copilotCredentials', () => {
     expect(() => writeCopilotAuth(1, { gitHubToken: '' })).toThrow(CopilotCredentialsError);
   });
 
-  it('buildCopilotSdkEnv tags BOTTEGA_USER_ID and strips inherited GitHub tokens', () => {
-    process.env['GITHUB_TOKEN'] = 'leak-me';
-    process.env['GH_TOKEN'] = 'leak-me-too';
+  it('buildCopilotSdkEnv tags BOTTEGA_USER_ID and isolates inherited GitHub credentials', () => {
+    for (const key of ISOLATED_ENV_KEYS) process.env[key] = `host-${key}`;
     const env = buildCopilotSdkEnv(11);
     expect(env.BOTTEGA_USER_ID).toBe('11');
     expect(env['GITHUB_TOKEN']).toBeUndefined();
     expect(env['GH_TOKEN']).toBeUndefined();
-    delete process.env['GITHUB_TOKEN'];
-    delete process.env['GH_TOKEN'];
+    expect(env['GH_ENTERPRISE_TOKEN']).toBeUndefined();
+    expect(env['GITHUB_ENTERPRISE_TOKEN']).toBeUndefined();
+    expect(env['SSH_AUTH_SOCK']).toBeUndefined();
+    expect(env['GH_CONFIG_DIR']).toBe(path.join(tmpRoot, '11', 'copilot', 'gh'));
+    expect(fs.readdirSync(env['GH_CONFIG_DIR']!)).toEqual([]);
+    expect(env['GIT_CONFIG_GLOBAL']).toBe('/dev/null');
+    expect(env['GIT_CONFIG_SYSTEM']).toBe('/dev/null');
+    expect(env['GIT_TERMINAL_PROMPT']).toBe('0');
+    expect(env['GIT_SSH_COMMAND']).toBe('ssh -F /dev/null -o IdentityFile=none -o IdentitiesOnly=yes -o BatchMode=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes');
+  });
+
+  it('buildCopilotRuntimeEnv does not set or replace model authentication', () => {
+    const env = buildCopilotRuntimeEnv(11);
+    expect(env['COPILOT_SDK_AUTH_TOKEN']).toBeUndefined();
+    expect(env['COPILOT_GITHUB_TOKEN']).toBeUndefined();
+    expect(env['BOTTEGA_USER_ID']).toBeUndefined();
   });
 });

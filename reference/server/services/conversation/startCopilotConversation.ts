@@ -14,7 +14,7 @@
 // `stream_delta` UnifiedMessages and are rendered by the existing path.
 
 import { promises as fs } from 'fs';
-import { agentRunsDb, conversationsDb, tasksDb } from '../../database/db.js';
+import { conversationsDb, tasksDb } from '../../database/db.js';
 import { resolveResumeModelEffort } from '../agentModelSettings.js';
 import { getWorktreeProjectPath, worktreeExists } from '../worktree.js';
 import { generateConversationTitle } from '../titleGenerator.js';
@@ -32,15 +32,21 @@ import {
 } from './streamingLifecycle.js';
 import { buildAgentRunCompletionHandler } from './agentRunLifecycle.js';
 import { resolveSlashCommand } from './slashCommands.js';
-import type { ConversationOptions, StreamingContext } from './types.js';
+import type { ConversationOptions, ProviderTerminationOutcome, StreamingContext } from './types.js';
 import type { BroadcastFn } from '@shared/websocket/messages';
 import type { UnifiedMessage } from '@shared/providers/types';
 
-function composeOnComplete(ctx: StreamingContext): () => Promise<void> {
-  return composeAsync<void>(
+function composeOnComplete(ctx: StreamingContext): (outcome: ProviderTerminationOutcome) => Promise<void> {
+  return composeAsync<ProviderTerminationOutcome>(
     () => handleStreamingComplete(ctx),
     buildAgentRunCompletionHandler(ctx),
   );
+}
+
+function isCopilotSuccess(unified: UnifiedMessage): boolean {
+  return unified.type === 'result' &&
+    !unified.isError &&
+    (unified.raw as { type?: string } | null)?.type === 'session.idle';
 }
 
 function unifiedToWireMessage(unified: UnifiedMessage): Record<string, unknown> | null {
@@ -151,28 +157,6 @@ function broadcastUnified(
   });
 }
 
-/** See the OpenCode equivalent: pre-mark a still-running agent run as
- * 'failed' the instant a `result` event reports an error, so the
- * completion handler doesn't auto-chain off a failed turn. */
-function failLinkedAgentRunIfRunning(
-  taskId: number | undefined,
-  conversationId: number,
-): void {
-  if (!taskId) return;
-  try {
-    const runs = agentRunsDb.getByTask(taskId);
-    const linked = runs.find((r) => r.conversation_id === conversationId);
-    if (linked && linked.status === 'running') {
-      agentRunsDb.updateStatus(linked.id, 'failed');
-    }
-  } catch (err) {
-    console.warn(
-      '[ConversationAdapter] failed to pre-mark Copilot agent run as failed:',
-      err,
-    );
-  }
-}
-
 /**
  * Resume an existing Copilot conversation. Mirrors `sendOpenCodeMessage`.
  */
@@ -273,6 +257,7 @@ export async function sendCopilotMessage(
   });
 
   try {
+    let outcome: ProviderTerminationOutcome = 'error';
     for await (const unified of run.events) {
       broadcastUnified(broadcastFn, conversationId, unified);
       await mirrorCopilotEvent(
@@ -282,9 +267,7 @@ export async function sendCopilotMessage(
         console.warn('[ConversationAdapter] Copilot resume mirror failed:', err);
       });
       if (unified.type === 'result') {
-        if (unified.isError) {
-          failLinkedAgentRunIfRunning(taskId ?? undefined, conversationId);
-        }
+        outcome = isCopilotSuccess(unified) ? 'success' : 'error';
         await contextUsageTracker.onResult({
           type: 'result',
           ...(unified.usage ? { modelUsage: { copilot: unified.usage } } : {}),
@@ -293,7 +276,7 @@ export async function sendCopilotMessage(
     }
 
     activeSessions.delete(resumeSessionId);
-    if (broadcastFn) {
+    if (broadcastFn && outcome === 'success') {
       broadcastFn(conversationId, {
         type: 'claude-complete',
         sessionId: resumeSessionId,
@@ -301,7 +284,7 @@ export async function sendCopilotMessage(
         isNewSession: false,
       });
     }
-    await composeOnComplete(ctx)();
+    await composeOnComplete(ctx)(abortController.signal.aborted && outcome !== 'success' ? 'aborted' : outcome);
   } catch (error) {
     console.error('[ConversationAdapter] Copilot resume error:', error);
     activeSessions.delete(resumeSessionId);
@@ -312,7 +295,7 @@ export async function sendCopilotMessage(
         error: errMsg,
       });
     }
-    await composeOnComplete(ctx)();
+    await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');
     throw error;
   }
 }
@@ -416,6 +399,7 @@ export async function startCopilotConversation(
 
     void (async () => {
       try {
+        let outcome: ProviderTerminationOutcome = 'error';
         for await (const unified of run.events) {
           if (
             !resolved &&
@@ -509,9 +493,7 @@ export async function startCopilotConversation(
           }
 
           if (unified.type === 'result') {
-            if (unified.isError) {
-              failLinkedAgentRunIfRunning(taskId, conversationId);
-            }
+            outcome = isCopilotSuccess(unified) ? 'success' : 'error';
             await contextUsageTracker.onResult({
               type: 'result',
               ...(unified.usage ? { modelUsage: { copilot: unified.usage } } : {}),
@@ -527,7 +509,7 @@ export async function startCopilotConversation(
           await handleVideoRecording(ctx.videoConfig);
         }
 
-        if (broadcastFn) {
+        if (broadcastFn && outcome === 'success') {
           broadcastFn(conversationId, {
             type: 'claude-complete',
             sessionId: ctx.claudeSessionId,
@@ -536,7 +518,7 @@ export async function startCopilotConversation(
           });
         }
 
-        await composeOnComplete(ctx)();
+        await composeOnComplete(ctx)(abortController.signal.aborted && outcome !== 'success' ? 'aborted' : outcome);
       } catch (error) {
         console.error('[ConversationAdapter] Copilot streaming error:', error);
         if (ctx.claudeSessionId) {
@@ -549,6 +531,7 @@ export async function startCopilotConversation(
 
         if (!resolved) {
           clearTimeout(timeout);
+          await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');
           reject(error instanceof Error ? error : new Error(String(error)));
           return;
         }
@@ -559,7 +542,7 @@ export async function startCopilotConversation(
             error: errMsg,
           });
         }
-        await composeOnComplete(ctx)();
+        await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');
       }
     })();
   });

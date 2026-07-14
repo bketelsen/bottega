@@ -25,16 +25,11 @@ import {
   getPullRequestStatus,
   mergeAndCleanup,
   hasUncommittedChanges,
-  pushChanges,
 } from '../services/worktree.js';
 import { createTaskWithWorkspace, TaskCreationError } from '../services/taskCreation.js';
-import { createOrUpdatePR } from '../services/prService.js';
+import { ensureTaskPullRequest } from '../services/prService.js';
 import { switchWorktree } from '../services/webServerManager.js';
-import {
-  assertCapability,
-  GitHubCapabilityError,
-  type GitHubAction,
-} from '../services/github/capabilities.js';
+import { GitHubCapabilityError } from '../services/github/capabilities.js';
 import type { TaskUpdates } from '../database/db.js';
 import type { ApiError } from '../../shared/api/_common.js';
 import { validateBody, validateParams, validateQuery } from '../middleware/validate.js';
@@ -70,19 +65,6 @@ import {
 } from '../../shared/schemas/tasks.js';
 
 const router = express.Router();
-
-function freshGitHubEffectGuard(projectId: number, userId: number) {
-  return (action: Extract<GitHubAction, 'push' | 'createPR'>): void => {
-    const project = getProject(projectId, userId);
-    if (!project) {
-      throw new Error(`Project ${projectId} not found`);
-    }
-    // Local-only projects retain their existing worktree behavior.
-    if (project.github_repo) {
-      assertCapability(project, action);
-    }
-  };
-}
 
 function sendGitHubCapabilityError(res: Response<unknown>, error: unknown): boolean {
   if (!(error instanceof GitHubCapabilityError)) return false;
@@ -848,15 +830,7 @@ router.post(
       }
 
       const { title, body } = req.validated!.body as CreatePullRequestBody;
-      const beforeEffect = freshGitHubEffectGuard(taskWithProject.project_id, userId);
-
-      const result = await createOrUpdatePR(
-        taskWithProject.repo_folder_path,
-        taskId,
-        title,
-        body || '',
-        { beforeEffect },
-      );
+      const result = await ensureTaskPullRequest(taskId, { title, body: body || '' });
       res.json(result);
     } catch (error) {
       if (sendGitHubCapabilityError(res, error)) return;
@@ -978,14 +952,7 @@ router.post(
 
       const { commitMessage } = req.validated!.body as PushChangesBody;
       const message = commitMessage || taskWithProject.title || `Task #${taskId}`;
-      const beforeEffect = freshGitHubEffectGuard(taskWithProject.project_id, userId);
-
-      const result = await pushChanges(
-        taskWithProject.repo_folder_path,
-        taskId,
-        message,
-        { beforeEffect },
-      );
+      const result = await ensureTaskPullRequest(taskId, { title: message });
       res.json(result);
     } catch (error) {
       if (sendGitHubCapabilityError(res, error)) return;

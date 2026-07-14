@@ -92,7 +92,7 @@ describe('credentials/opencode adapter', () => {
     expect(env['BOTTEGA_USER_ID']).toBe('99');
   });
 
-  it('buildSdkEnv() pins per-user XDG dirs, preserves host gh config, and strips global OPENCODE_* keys', () => {
+  it('buildSdkEnv() pins per-user XDG dirs, isolates gh config, and strips global OPENCODE_* keys', () => {
     process.env['OPENCODE_AUTH_CONTENT'] = '{"opencode":{"type":"api","key":"bad"}}';
     process.env['OPENCODE_CONFIG'] = '/etc/passwd';
     process.env['OPENCODE_CONFIG_CONTENT'] = '{"bad":true}';
@@ -105,9 +105,7 @@ describe('credentials/opencode adapter', () => {
     expect(env['XDG_CONFIG_HOME']).toBe(resolveOpenCodeConfigDir(42));
     expect(env['XDG_STATE_HOME']).toBe(resolveOpenCodeStateDir(42));
     expect(env['XDG_CACHE_HOME']).toBe(resolveOpenCodeCacheDir(42));
-    // gh gets a targeted host config override so OpenCode can keep a
-    // per-user XDG_CONFIG_HOME without breaking `gh pr create`.
-    expect(env['GH_CONFIG_DIR']).toBe('/host/gh');
+    expect(env['GH_CONFIG_DIR']).toBe(`${resolveOpenCodeConfigDir(42)}/gh`);
     expect(env['OPENCODE_AUTH_CONTENT']).toBeUndefined();
     expect(env['OPENCODE_CONFIG_DIR']).toBeUndefined();
     expect(env['OPENCODE_CONFIG']).toBe('/dev/null');

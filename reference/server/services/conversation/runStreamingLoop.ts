@@ -18,6 +18,7 @@ import type { ThinkingAccumulator } from './thinkingPatcher.js';
 import type { ContextUsageTracker } from '../contextUsageTracker.js';
 import type { BroadcastFn } from '@shared/websocket/messages';
 import { isClaudeAuthError } from './retryOn401.js';
+import type { ProviderTerminationOutcome } from './types.js';
 
 interface SDKIteratorMessage {
   type: string;
@@ -92,11 +93,16 @@ export async function runStreamingLoop({
   onSessionId,
   broadcastClaudeStatus = false,
   onResult,
-}: RunStreamingLoopParams): Promise<{ claudeSessionId: string | null; authError: boolean }> {
+}: RunStreamingLoopParams): Promise<{
+  claudeSessionId: string | null;
+  authError: boolean;
+  outcome: ProviderTerminationOutcome;
+}> {
   let claudeSessionId: string | null = initialSessionId;
   let firstSessionIdSeen = initialSessionId !== null;
   let sessionCreatedBroadcast = false;
   let resultObserved = false;
+  let outcome: ProviderTerminationOutcome = 'error';
   let authError = false;
 
   try {
@@ -199,24 +205,25 @@ export async function runStreamingLoop({
       // racing with the caller's abort.
       if (sdkMessage.type === 'result' && !resultObserved) {
         resultObserved = true;
+        outcome = sdkMessage.is_error === true ? 'error' : 'success';
         onResult?.();
       }
     }
   } catch (error) {
-    // After `result`, the meaningful part of the turn is done. If the
+    // After a successful `result`, the meaningful part of the turn is done. If the
     // iterator then errors out — typically because `onResult` aborted the
     // SDK subprocess to break it out of an `assistantAutoBackgrounded`
     // wait — treat it as a clean turn end so the caller's success-path
     // lifecycle (streaming-ended, agent-run completed, chaining) still
-    // runs. Errors thrown *before* `result` propagate as before.
-    if (resultObserved) {
+    // runs. Error results and errors thrown before success propagate.
+    if (outcome === 'success') {
       console.log(
         `[ConversationAdapter] iterator threw after result for session ${claudeSessionId} — treating as clean turn end (${(error as Error).message ?? error})`,
       );
-      return { claudeSessionId, authError };
+      return { claudeSessionId, authError, outcome };
     }
     throw error;
   }
 
-  return { claudeSessionId, authError };
+  return { claudeSessionId, authError, outcome };
 }

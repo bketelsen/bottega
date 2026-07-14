@@ -8,11 +8,14 @@ import type {
   CreateAdminUserResponse,
   DeleteAdminUserResponse,
   GetProjectMembersResponse,
+  GitHubAppHealthResponse,
+  GitHubAppHealthErrorCode,
   ListAdminProjectsResponse,
   ListAdminUsersResponse,
   RemoveProjectMemberResponse,
   UpdateAdminUserResponse,
 } from '../../shared/api/admin.js';
+import { getGitHubAppHealth } from '../services/github/appAuth.js';
 import { validateBody, validateParams } from '../middleware/validate.js';
 import {
   AddProjectMemberBodySchema,
@@ -30,6 +33,48 @@ import {
 } from '../../shared/schemas/_common.js';
 
 const router = express.Router();
+
+const GITHUB_APP_ERROR_CODES = new Set<GitHubAppHealthErrorCode>([
+  'GITHUB_APP_NOT_CONFIGURED',
+  'GITHUB_APP_KEY_INVALID',
+  'GITHUB_INSTALLATION_NOT_FOUND',
+  'GITHUB_INSTALLATION_SUSPENDED',
+  'GITHUB_REPOSITORY_NOT_SELECTED',
+  'GITHUB_APP_PERMISSION_MISSING',
+  'GITHUB_APP_TOKEN_FAILED',
+]);
+
+router.get(
+  '/github-app/health',
+  async (_req: Request, res: Response<GitHubAppHealthResponse | ApiError>) => {
+    try {
+      res.json(await getGitHubAppHealth());
+    } catch (error) {
+      console.error('Error checking GitHub App health:', error);
+      const candidate = (error as { code?: unknown }).code;
+      const errorCode = typeof candidate === 'string'
+        && GITHUB_APP_ERROR_CODES.has(candidate as GitHubAppHealthErrorCode)
+        ? candidate as GitHubAppHealthErrorCode
+        : 'GITHUB_APP_NOT_CONFIGURED';
+      const externalUrl = process.env.BOTTEGA_EXTERNAL_URL?.trim();
+      res.json({
+        mode: process.env.GITHUB_AUTH_MODE?.trim() === 'app' ? 'app' : 'host',
+        status: 'error',
+        configured: false,
+        appId: null,
+        appSlug: null,
+        botLogin: null,
+        botUserId: null,
+        webhookConfigured: Boolean(externalUrl && process.env.GITHUB_WEBHOOK_SECRET?.trim()),
+        webhookUrl: externalUrl ? `${externalUrl.replace(/\/+$/, '')}/api/webhooks/github` : null,
+        lastMetadataSuccessAt: null,
+        lastTokenMintSuccessAt: null,
+        errorCode,
+        error: error instanceof Error ? error.message : 'GitHub App health check failed',
+      });
+    }
+  },
+);
 
 // ============ User Management ============
 

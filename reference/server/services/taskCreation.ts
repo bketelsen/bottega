@@ -69,13 +69,14 @@ export async function createTaskWithWorkspace(
             created.id,
             normalizedTitle,
             project.subproject_path,
-            { existingBranch: existingWorktreeBranch },
+            { existingBranch: existingWorktreeBranch, projectId: project.id },
           )
         : await createWorktree(
             project.repo_folder_path,
             created.id,
             normalizedTitle,
             project.subproject_path,
+            { projectId: project.id },
           );
       if (!result.success) {
         throw new TaskCreationError(`Failed to create worktree: ${result.error ?? 'Unknown error'}`);

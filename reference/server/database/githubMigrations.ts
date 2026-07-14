@@ -7,6 +7,11 @@ interface ProjectIdentityRow {
   github_repo: string;
 }
 
+interface ProjectRepositoryIdRow {
+  id: number;
+  github_repository_id: number;
+}
+
 interface TaskIdentityRow {
   id: number;
   project_id: number;
@@ -132,4 +137,83 @@ export function enforceGitHubIdentityConstraints(
 
   migrate.immediate();
   for (const message of warnings) warn(message);
+}
+
+export function migrateGitHubAppProjectIdentity(
+  database: Database.Database,
+  warn: (message: string) => void = console.warn,
+): void {
+  const warnings: string[] = [];
+  const migrate = database.transaction(() => {
+    const columns = database.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+    const names = new Set(columns.map(({ name }) => name));
+    if (!names.has('github_repository_id')) {
+      database.exec('ALTER TABLE projects ADD COLUMN github_repository_id INTEGER');
+    }
+    if (!names.has('github_installation_id')) {
+      database.exec('ALTER TABLE projects ADD COLUMN github_installation_id INTEGER');
+    }
+
+    const rows = database.prepare(
+      `SELECT id, github_repository_id FROM projects
+       WHERE github_repository_id IS NOT NULL
+       ORDER BY COALESCE(created_at, '') ASC, id ASC`,
+    ).all() as ProjectRepositoryIdRow[];
+    const retained = new Map<number, number>();
+    const quarantine = database.prepare(
+      `UPDATE projects
+       SET github_repository_id = NULL,
+           github_installation_id = NULL,
+           github_automation_enabled = 0
+       WHERE id = ?`,
+    );
+    for (const row of rows) {
+      const retainedId = retained.get(row.github_repository_id);
+      if (retainedId === undefined) {
+        retained.set(row.github_repository_id, row.id);
+        continue;
+      }
+      quarantine.run(row.id);
+      warnings.push(
+        `[Migration] Disabled GitHub automation for project ${row.id}: repository ID ${row.github_repository_id} is retained by older project ${retainedId}`,
+      );
+    }
+
+    database.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_github_repository_id
+        ON projects(github_repository_id)
+        WHERE github_repository_id IS NOT NULL;
+    `);
+  });
+
+  migrate.immediate();
+  for (const message of warnings) warn(message);
+}
+
+export function migrateGitHubFinalizationRuns(database: Database.Database): void {
+  const migrate = database.transaction(() => {
+    const columns = database.prepare('PRAGMA table_info(task_agent_runs)').all() as Array<{
+      name: string;
+    }>;
+    const names = new Set(columns.map(({ name }) => name));
+    const additions: ReadonlyArray<[string, string]> = [
+      [
+        'github_finalize_status',
+        "TEXT NOT NULL DEFAULT 'none' CHECK (github_finalize_status IN ('none', 'ready', 'finalizing', 'finalized', 'failed'))",
+      ],
+      ['github_finalize_head_sha', 'TEXT'],
+      ['github_finalize_error', 'TEXT'],
+      ['github_finalize_started_at', 'DATETIME'],
+    ];
+
+    for (const [name, definition] of additions) {
+      if (!names.has(name)) {
+        database.exec(`ALTER TABLE task_agent_runs ADD COLUMN ${name} ${definition}`);
+      }
+    }
+  });
+
+  // IMMEDIATE serializes concurrent startup migrations before either process
+  // inspects the column list, avoiding duplicate-column races.
+  migrate.immediate();
 }

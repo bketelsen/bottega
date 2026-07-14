@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Users, FolderGit2, Plus, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Users, FolderGit2, Github, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { UserList, UserForm, ProjectMembersEditor } from '../components/Admin';
@@ -9,11 +9,12 @@ import { api } from '../utils/api';
 import type {
   AdminUserListItem,
   AdminProjectListItem,
+  GitHubAppHealthResponse,
 } from '../../shared/api/admin';
 import type { ApiError } from '../../shared/api/_common';
 import type { UserFormSubmitData, UserFormSubmitResult } from '../components/Admin/UserForm';
 
-type AdminTab = 'users' | 'projects';
+type AdminTab = 'users' | 'projects' | 'github';
 
 function AdminPage() {
   const navigate = useNavigate();
@@ -27,6 +28,8 @@ function AdminPage() {
 
   const [projects, setProjects] = useState<AdminProjectListItem[]>([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
+  const [githubHealth, setGithubHealth] = useState<GitHubAppHealthResponse | null>(null);
+  const [isLoadingGithubHealth, setIsLoadingGithubHealth] = useState(true);
 
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUser, setEditingUser] = useState<AdminUserListItem | null>(null);
@@ -76,12 +79,26 @@ function AdminPage() {
     }
   }, []);
 
+  const loadGithubHealth = useCallback(async () => {
+    setIsLoadingGithubHealth(true);
+    try {
+      const response = await api.admin.getGitHubAppHealth();
+      if (response.ok) setGithubHealth(await response.json());
+      else setError('Failed to load GitHub App health');
+    } catch {
+      setError('Failed to load GitHub App health');
+    } finally {
+      setIsLoadingGithubHealth(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (isAdmin) {
       void loadUsers();
       void loadProjects();
+      void loadGithubHealth();
     }
-  }, [isAdmin, loadUsers, loadProjects]);
+  }, [isAdmin, loadUsers, loadProjects, loadGithubHealth]);
 
   const handleUserSubmit = async (data: UserFormSubmitData): Promise<UserFormSubmitResult> => {
     setIsSubmittingUser(true);
@@ -186,6 +203,7 @@ function AdminPage() {
           onClick={() => {
             void loadUsers();
             void loadProjects();
+            void loadGithubHealth();
           }}
           title="Refresh"
         >
@@ -216,6 +234,17 @@ function AdminPage() {
         >
           <FolderGit2 className="h-4 w-4" />
           Project Memberships
+        </button>
+        <button
+          onClick={() => setActiveTab('github')}
+          className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+            activeTab === 'github'
+              ? 'text-primary border-b-2 border-primary'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <Github className="h-4 w-4" />
+          GitHub App
         </button>
       </div>
 
@@ -277,6 +306,33 @@ function AdminPage() {
                   users={users}
                   onMembershipChange={loadProjects}
                 />
+              )}
+            </div>
+          )}
+
+          {activeTab === 'github' && (
+            <div className="space-y-4" data-testid="github-app-health">
+              <h2 className="text-lg font-medium text-foreground">GitHub App Health</h2>
+              {isLoadingGithubHealth ? (
+                <p className="text-sm text-muted-foreground">Checking GitHub App...</p>
+              ) : githubHealth ? (
+                <div className="rounded-md border border-border p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">{githubHealth.mode === 'app' ? 'App mode' : 'Host mode'}</span>
+                    <span className="text-sm capitalize">{githubHealth.status}</span>
+                  </div>
+                  {githubHealth.appSlug && <p className="text-sm">App: {githubHealth.appSlug}</p>}
+                  <p className="text-sm text-muted-foreground">
+                    Webhook: {githubHealth.webhookConfigured ? 'configured' : 'not configured'}
+                  </p>
+                  {githubHealth.error && (
+                    <p className="text-sm text-red-500">
+                      {githubHealth.errorCode ? `${githubHealth.errorCode}: ` : ''}{githubHealth.error}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Health information is unavailable.</p>
               )}
             </div>
           )}

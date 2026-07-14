@@ -14,6 +14,7 @@ import type {
   DeleteProjectResponse,
   GetProjectResponse,
   ListProjectsResponse,
+  ProjectReadinessErrorResponse,
   UpdateProjectResponse,
   UploadProjectFileResponse,
 } from '../../shared/api/projects.js';
@@ -32,10 +33,19 @@ import {
   UpdateProjectBodySchema,
   type UpdateProjectBody,
 } from '../../shared/schemas/projects.js';
+import {
+  getGitHubAppHealth,
+  resolveRepositoryInstallation,
+  type GitHubRepositoryInstallation,
+} from '../services/github/appAuth.js';
 
 const router = express.Router();
 
-class ProjectReadinessError extends Error {}
+class ProjectReadinessError extends Error {
+  constructor(message: string, readonly code = 'PROJECT_AUTOMATION_NOT_READY') {
+    super(message);
+  }
+}
 
 const hasGitHubMutation = (body: CreateProjectBody | UpdateProjectBody): boolean =>
   body.githubRepo !== undefined ||
@@ -75,13 +85,51 @@ async function validateAutomationReadiness(
     }
   }
 
-  if (autonomyTier === 'pr' || autonomyTier === 'automerge') {
+  if (
+    process.env.GITHUB_AUTH_MODE?.trim() !== 'app' &&
+    (autonomyTier === 'pr' || autonomyTier === 'automerge')
+  ) {
     const gitConfig = userDb.getGitConfig(ownerId);
     if (!gitConfig?.git_name?.trim() || !gitConfig.git_email?.trim()) {
       throw new ProjectReadinessError(
         'The project owner must configure a Git name and email for PR automation',
       );
     }
+  }
+}
+
+async function resolveAppRepository(
+  githubRepo: string | null,
+): Promise<GitHubRepositoryInstallation | null> {
+  if (process.env.GITHUB_AUTH_MODE?.trim() !== 'app') return null;
+  if (!githubRepo) {
+    throw new ProjectReadinessError(
+      'Link a GitHub repository before enabling automation',
+      'GITHUB_REPOSITORY_NOT_SELECTED',
+    );
+  }
+  let health: Awaited<ReturnType<typeof getGitHubAppHealth>>;
+  try {
+    health = await getGitHubAppHealth();
+  } catch (error) {
+    throw new ProjectReadinessError(
+      error instanceof Error ? error.message : 'GitHub App authentication is not configured',
+      (error as { code?: string }).code ?? 'GITHUB_APP_NOT_CONFIGURED',
+    );
+  }
+  if (health.status === 'error' || !health.configured) {
+    throw new ProjectReadinessError(
+      health.error ?? 'GitHub App authentication is not healthy',
+      health.errorCode ?? 'GITHUB_APP_NOT_CONFIGURED',
+    );
+  }
+  try {
+    return await resolveRepositoryInstallation(githubRepo);
+  } catch (error) {
+    throw new ProjectReadinessError(
+      error instanceof Error ? error.message : 'GitHub repository verification failed',
+      (error as { code?: string }).code ?? 'GITHUB_REPOSITORY_NOT_SELECTED',
+    );
   }
 }
 
@@ -101,7 +149,7 @@ router.post(
   validateBody(CreateProjectBodySchema),
   async (
     req: Request,
-    res: Response<CreateProjectResponse | ApiError>,
+    res: Response<CreateProjectResponse | ProjectReadinessErrorResponse | ApiError>,
   ) => {
     try {
       const userId = req.user!.id;
@@ -112,10 +160,13 @@ router.post(
         return res.status(403).json({ error: 'Admin access is required to change GitHub settings' });
       }
 
-      const githubRepo = body.githubRepo ?? null;
+      let githubRepo = body.githubRepo ?? null;
       const autonomyTier = body.autonomyTier ?? 'advisory';
+      let appRepository: GitHubRepositoryInstallation | null = null;
       if (body.githubAutomationEnabled) {
         await validateAutomationReadiness(userId, githubRepo, autonomyTier);
+        appRepository = await resolveAppRepository(githubRepo);
+        githubRepo = appRepository?.canonicalFullName ?? githubRepo;
       }
 
       const created = projectsDb.create(
@@ -134,6 +185,14 @@ router.post(
         try {
           const updated = updateProject(created.id, userId, updates);
           if (!updated) throw new Error('Created project settings could not be saved');
+          if (appRepository) {
+            projectsDb.updateGitHubIdentity(
+              created.id,
+              appRepository.canonicalFullName,
+              appRepository.repositoryId,
+              appRepository.installationId,
+            );
+          }
         } catch (error) {
           deleteProject(created.id, userId);
           throw error;
@@ -148,7 +207,7 @@ router.post(
       const code = (error as { code?: string }).code;
       const message = error instanceof Error ? error.message : String(error);
       if (error instanceof ProjectReadinessError) {
-        return res.status(400).json({ error: error.message });
+        return res.status(400).json({ error: error.message, code: error.code });
       }
       if (code === 'SQLITE_CONSTRAINT_UNIQUE' || message.includes('UNIQUE')) {
         return res
@@ -187,7 +246,7 @@ router.put(
   validateBody(UpdateProjectBodySchema),
   async (
     req: Request,
-    res: Response<UpdateProjectResponse | ApiError>,
+    res: Response<UpdateProjectResponse | ProjectReadinessErrorResponse | ApiError>,
   ) => {
     try {
       const userId = req.user!.id;
@@ -198,6 +257,7 @@ router.put(
         return res.status(403).json({ error: 'Admin access is required to change GitHub settings' });
       }
 
+      let appRepository: GitHubRepositoryInstallation | null = null;
       if (hasGitHubMutation(body)) {
         const existing = getProject(projectId, userId);
         if (!existing) {
@@ -213,6 +273,7 @@ router.put(
         const autonomyTier = body.autonomyTier ?? existing.autonomy_tier ?? 'advisory';
         if (automationEnabled) {
           await validateAutomationReadiness(existing.user_id, githubRepo, autonomyTier);
+          appRepository = await resolveAppRepository(githubRepo);
         }
       }
 
@@ -227,7 +288,7 @@ router.put(
         updates.subproject_path = body.subprojectPath?.trim() || null;
       }
       if (body.githubRepo !== undefined) {
-        updates.github_repo = body.githubRepo;
+        updates.github_repo = appRepository?.canonicalFullName ?? body.githubRepo;
       }
       if (body.githubAutomationEnabled !== undefined) {
         updates.github_automation_enabled = body.githubAutomationEnabled ? 1 : 0;
@@ -236,18 +297,27 @@ router.put(
         updates.autonomy_tier = body.autonomyTier;
       }
 
+      const verifiedProject = appRepository
+        ? projectsDb.updateGitHubIdentity(
+          projectId,
+          appRepository.canonicalFullName,
+          appRepository.repositoryId,
+          appRepository.installationId,
+        )
+        : undefined;
+
       const project = updateProject(projectId, userId, updates);
       if (!project) {
         return res.status(404).json({ error: 'Project not found' });
       }
 
-      res.json(project);
+      res.json(verifiedProject ? { ...verifiedProject, ...project } : project);
     } catch (error) {
       console.error('Error updating project:', error);
       const code = (error as { code?: string }).code;
       const message = error instanceof Error ? error.message : String(error);
       if (error instanceof ProjectReadinessError) {
-        return res.status(400).json({ error: error.message });
+        return res.status(400).json({ error: error.message, code: error.code });
       }
       if (code === 'SQLITE_CONSTRAINT_UNIQUE' || message.includes('UNIQUE')) {
         return res

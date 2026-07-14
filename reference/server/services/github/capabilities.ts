@@ -3,6 +3,7 @@ import type { AutonomyTier, ProjectRow } from '../../../shared/types/db.js';
 export type { AutonomyTier };
 
 export type GitHubAction =
+  | 'read'
   | 'comment'
   | 'label'
   | 'reaction'
@@ -14,6 +15,7 @@ export type GitHubAction =
 export type GitHubProject = ProjectRow;
 
 const MINIMUM_TIER: Record<GitHubAction, AutonomyTier> = {
+  read: 'advisory',
   comment: 'advisory',
   label: 'advisory',
   reaction: 'advisory',
@@ -48,8 +50,9 @@ export class GitHubCapabilityError extends Error {
 }
 
 export function can(project: GitHubProject, action: GitHubAction): boolean {
+  if (!project.github_repo) return false;
+  if (action === 'read') return true;
   return project.github_automation_enabled === 1
-    && Boolean(project.github_repo)
     && TIER_RANK[project.autonomy_tier] >= TIER_RANK[MINIMUM_TIER[action]];
 }
 

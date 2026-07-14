@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { ThreadEvent } from '@openai/codex-sdk';
+import type { Codex, ThreadEvent } from '@openai/codex-sdk';
 
 import { CodexProvider } from './index.js';
 
@@ -17,13 +17,13 @@ function makeFakeCodex(events: ThreadEvent[]) {
     startThread: vi.fn(() => thread),
     resumeThread: vi.fn(() => thread),
   };
-  return { codex: codex as unknown as ConstructorParameters<typeof CodexProvider>[0], thread };
+  return { codex: codex as unknown as Pick<Codex, 'startThread' | 'resumeThread'>, thread };
 }
 
 describe('CodexProvider', () => {
   it("name is 'openai' and capabilities match the conservative v1 matrix", () => {
     const { codex } = makeFakeCodex([]);
-    const p = new CodexProvider(codex);
+    const p = new CodexProvider(() => codex);
     expect(p.name).toBe('openai');
     const caps = p.getCapabilities();
     expect(caps.supportsAskUserQuestion).toBe(false);
@@ -43,7 +43,7 @@ describe('CodexProvider', () => {
       },
     ] as never);
 
-    const p = new CodexProvider(codex);
+    const p = new CodexProvider(() => codex);
     const run = await p.startTurn({ cwd: '/x', prompt: 'hello', model: 'gpt-5.5', effort: null });
     const collected: { type: string }[] = [];
     for await (const m of run.events) collected.push(m);
@@ -64,7 +64,7 @@ describe('CodexProvider', () => {
         usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 },
       },
     ] as never);
-    const p = new CodexProvider(codex);
+    const p = new CodexProvider(() => codex);
     const run = await p.startTurn({ cwd: '/x', prompt: 'hi', model: 'gpt-5.5', effort: null });
     // Drain the events so the generator runs the thread.started branch.
     for await (const _ of run.events) {
@@ -82,7 +82,7 @@ describe('CodexProvider', () => {
         usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 },
       },
     ] as never);
-    const p = new CodexProvider(codex);
+    const p = new CodexProvider(() => codex);
     await p.sendTurnMessage({ cwd: '/x', prompt: 'msg', model: 'gpt-5.5', effort: null, resumeSessionId: 'tid-old' });
     expect((codex as unknown as { resumeThread: ReturnType<typeof vi.fn> }).resumeThread).toHaveBeenCalledWith(
       'tid-old',
@@ -92,7 +92,32 @@ describe('CodexProvider', () => {
 
   it('abortTurn returns false for an unknown session id', () => {
     const { codex } = makeFakeCodex([]);
-    const p = new CodexProvider(codex);
+    const p = new CodexProvider(() => codex);
     expect(p.abortTurn('unknown')).toBe(false);
+  });
+
+  it('constructs the SDK client with the per-turn credential environment', async () => {
+    const { codex } = makeFakeCodex([]);
+    const createCodex = vi.fn(() => codex);
+    const p = new CodexProvider(createCodex);
+
+    await p.startTurn({
+      cwd: '/x',
+      prompt: 'hello',
+      model: 'gpt-5.5',
+      effort: null,
+      env: {
+        CODEX_HOME: '/users/7/codex',
+        PATH: '/bin',
+        OPENAI_API_KEY: undefined,
+      },
+    });
+
+    expect(createCodex).toHaveBeenCalledWith({
+      env: {
+        CODEX_HOME: '/users/7/codex',
+        PATH: '/bin',
+      },
+    });
   });
 });

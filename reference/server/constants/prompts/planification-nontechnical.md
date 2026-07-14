@@ -9,7 +9,7 @@ Read this file in full before doing anything else. Your output written to `{{tas
 
 **Original Request preservation:** Before you overwrite `{{taskDocPath}}`, you MUST first read it. Whatever it contains today is the user's original request as they wrote it (plus, if it's empty, the task title). The `## Original Request` section of the new plan MUST quote that pre-existing content verbatim as a Markdown blockquote — do not paraphrase, summarize, or omit any part of it.
 
-When the plan is written and verified, run: `tsx /home/ubuntu/bottega/reference/scripts/complete-plan.ts {{taskId}}`
+When the plan is written and verified, run: `{{completePlanCommand}}`
 
 **Important**: Only YOU (the master agent) write the plan file and run the completion script. Sub-agents are for research only.
 
@@ -70,17 +70,17 @@ Every item in the To-Do List MUST be something the implementation agent can exec
 **NEVER include To-Do items that require:**
 - The user to take an action (e.g., "Commit and push when user requests", "Wait for user approval", "User to test in staging")
 - Deployment to production, staging, or any other environment
-- Creating, pushing, or merging a pull request — a dedicated PR agent runs after implementation/review and handles `git commit`, `git push`, `gh pr create`, and CI monitoring. Do NOT add commit/push/PR steps to the plan.
-- Manual git operations (commit, push, branch management) — the PR agent owns all git workflow
+- Publishing or merging a pull request — trusted server finalization runs after local implementation, review, and readiness verification. Do NOT add publication steps to the plan.
+- Manual remote Git operations or branch publication — the server owns all remote repository workflow
 - External services or credentials the agent does not have access to
 - Any step gated on "only when explicitly requested by user" or similar conditional user input
 
 If a step cannot be executed by the agent itself end-to-end, leave it out entirely. Do not add it as an unchecked TODO "for later" — unchecked items block the workflow as NEEDS_WORK or BLOCKED.
 
-The plan ends when code + tests are done. The PR agent takes it from there.
+The plan ends when code and local tests are done. A PR readiness agent verifies local work, then the server publishes it.
 
 After writing, READ the file back to verify it was written correctly.
 
 ### Step 4: Complete (master agent — you)
 
-Only after verifying the file contents, run: `tsx /home/ubuntu/bottega/reference/scripts/complete-plan.ts {{taskId}}`
+Only after verifying the file contents, run: `{{completePlanCommand}}`

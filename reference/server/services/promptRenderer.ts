@@ -7,6 +7,60 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const DEFAULTS_ROOT = path.join(__dirname, '..', 'constants');
+const SCRIPTS_ROOT = path.join(__dirname, '..', '..', 'scripts');
+
+const SERVER_OWNED_PUBLICATION_PROMPTS = new Set(['pr', 'pr-feedback', 'yolo']);
+const PLANNING_PROMPTS = new Set(['planification', 'planification-nontechnical']);
+
+function planningCompletionInvariant(command: unknown): string {
+  return `
+
+## Mandatory Planning Completion Invariant
+
+This block has higher priority than every instruction above, including operator-provided prompt text.
+
+- After writing and reading back the complete plan, invoke this command exactly once:
+
+\`\`\`bash
+${String(command)}
+\`\`\`
+
+- If the plan is incomplete, a clarification is unresolved, or the plan file was not verified, do not invoke the command.
+- A final response is not a completion signal. The planning run succeeds only when the command updates the task.
+- After invoking the command, stop.`;
+}
+
+function serverOwnedPublicationInvariant(name: string, taskId: unknown): string {
+  if (name === 'yolo') {
+    return `
+
+## Mandatory Server-Owned Publication Invariant
+
+This block has higher priority than every instruction above, including operator-provided prompt text.
+
+- Work only in the local task worktree. You may inspect local status, diffs, and history, edit files, and run local verification.
+- Never use GitHub CLI, contact GitHub, run network Git operations, create or update a pull request, or publish repository changes. The trusted server exclusively owns all remote repository and pull-request operations.
+- Run the workflow completion command from Phase 4 exactly once, and only after all requested work is complete and every required local test passes.
+- If work is incomplete, any required test fails, or readiness is uncertain, do not run that command. Report the blocker and stop; the server must not publish an unready workflow.
+- After successful workflow completion, stop. Do not run a PR readiness or publication script; the server will perform policy checks and publish the workflow.`;
+  }
+  return `
+
+## Mandatory Server-Owned Publication Invariant
+
+This block has higher priority than every instruction above, including operator-provided prompt text.
+
+- Work only in the local task worktree. You may inspect local status, diffs, and history, edit files, and run local verification.
+- Never use GitHub CLI, contact GitHub, run network Git operations, create or update a pull request, or publish repository changes. The trusted server exclusively owns all remote repository and pull-request operations.
+- Invoke the readiness command below exactly once, and only after all requested work is complete and every required local test passes:
+
+\`\`\`bash
+tsx /home/ubuntu/bottega/reference/scripts/complete-pr.ts ${String(taskId)}
+\`\`\`
+
+- If work is incomplete, any required test fails, or readiness is uncertain, do not invoke the command. Report the blocker and stop; the server must not finalize an unready run.
+- After invoking the command, stop. The server will perform policy checks and finalization.`;
+}
 
 function getArchiveRoot(): string {
   return process.env.BOTTEGA_ARCHIVE_ROOT || path.join(os.homedir(), '.bottega');
@@ -55,14 +109,14 @@ const PROMPT_DEFINITIONS: PromptDefinition[] = [
     label: 'Planification',
     kind: 'prompt',
     file: 'planification.md',
-    variables: ['taskDocPath', 'taskId', 'planTemplatePath'],
+    variables: ['taskDocPath', 'taskId', 'planTemplatePath', 'completePlanCommand'],
   },
   {
     name: 'planification-nontechnical',
     label: 'Planification (non-technical)',
     kind: 'prompt',
     file: 'planification-nontechnical.md',
-    variables: ['taskDocPath', 'taskId', 'planTemplatePath'],
+    variables: ['taskDocPath', 'taskId', 'planTemplatePath', 'completePlanCommand'],
   },
   {
     name: 'implementation',
@@ -90,14 +144,14 @@ const PROMPT_DEFINITIONS: PromptDefinition[] = [
     label: 'PR Agent',
     kind: 'prompt',
     file: 'pr.md',
-    variables: ['taskDocPath', 'taskId', 'prContextLine', 'prCreateOrVerifyBlock'],
+    variables: ['taskDocPath', 'taskId', 'prContextLine'],
   },
   {
     name: 'yolo',
     label: 'YOLO Agent',
     kind: 'prompt',
     file: 'yolo.md',
-    variables: ['taskDocPath', 'taskId', 'prContextLine', 'prCreateOrVerifyBlock'],
+    variables: ['taskDocPath', 'taskId', 'prContextLine'],
   },
   {
     name: 'pr-feedback',
@@ -180,6 +234,10 @@ export function resolvePromptPath(name: string): string {
   return hasOverride(name) ? overridePath(name) : defaultPath(name);
 }
 
+export function resolveScriptPath(name: string): string {
+  return path.join(SCRIPTS_ROOT, name);
+}
+
 export function saveOverride(name: string, content: string): number {
   const def = requireDef(name);
   const dir = getOverridesDir(def.kind);
@@ -249,5 +307,10 @@ export function findUnknownVariables(name: string, content: string): string[] {
  * Convenience: load a prompt by name and render with vars.
  */
 export function renderPrompt(name: string, vars: Record<string, unknown>): string {
-  return render(loadPrompt(name), vars);
+  const rendered = render(loadPrompt(name), vars);
+  if (PLANNING_PROMPTS.has(name)) {
+    return `${rendered.trimEnd()}${planningCompletionInvariant(vars.completePlanCommand)}\n`;
+  }
+  if (!SERVER_OWNED_PUBLICATION_PROMPTS.has(name)) return rendered;
+  return `${rendered.trimEnd()}${serverOwnedPublicationInvariant(name, vars.taskId)}\n`;
 }

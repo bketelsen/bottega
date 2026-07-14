@@ -18,9 +18,12 @@ vi.mock('../agentRunner.js', () => ({ startAgentRun: vi.fn() }));
 vi.mock('../taskCreation.js', () => ({ createTaskWithWorkspace: vi.fn() }));
 vi.mock('../worktree.js', () => ({ worktreeExists: vi.fn().mockResolvedValue(true) }));
 vi.mock('./capabilities.js', () => ({ can: vi.fn().mockReturnValue(true) }));
+vi.mock('./finalize.js', () => ({ recoverPrAgentRunFinalizations: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./client.js', () => ({
   normalizeGitHubRepo: (value: string) => value.toLowerCase(),
   githubClient: {
+    getAuthMode: vi.fn().mockReturnValue('host'),
+    getAppIdentity: vi.fn(),
     getSelf: vi.fn(),
     getIssue: vi.fn(),
     getIssueComments: vi.fn(),
@@ -45,6 +48,7 @@ import { MAX_WORKFLOW_RUNS } from '../conversation/agentRunLifecycle.js';
 import { updateGeneratedTaskDocSection } from '../documentation.js';
 import { can } from './capabilities.js';
 import { githubClient } from './client.js';
+import { recoverPrAgentRunFinalizations } from './finalize.js';
 import { githubIdentity } from './identity.js';
 import {
   _internal,
@@ -303,6 +307,12 @@ describe('repository recovery', () => {
     comments: [],
     head: { ref: 'feature', sha: 'abc' },
   };
+
+  it('runs finalization recovery during the startup and polling repository scan', async () => {
+    await reconcileRepository(1);
+
+    expect(recoverPrAgentRunFinalizations).toHaveBeenCalledWith(1);
+  });
 
   it('discovers unknown open PRs and stops polling a stored closed PR', async () => {
     vi.mocked(tasksDb.getByProject).mockReturnValue([{ ...task, github_pr_number: 44 }] as never);

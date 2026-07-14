@@ -388,6 +388,8 @@ function ProjectEditPageWrapper() {
               autonomyTier={autonomyTier}
               onAutonomyTierChange={setAutonomyTier}
               githubAutomationEnabled={githubAutomationEnabled}
+              repositoryId={project.github_repository_id ?? null}
+              installationId={project.github_installation_id ?? null}
               onGithubAutomationEnabledChange={setGithubAutomationEnabled}
               className="pt-6 border-t border-border space-y-4"
               titleClassName="text-sm font-medium text-foreground"

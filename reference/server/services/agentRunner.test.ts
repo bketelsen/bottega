@@ -557,7 +557,7 @@ describe('agentRunner', () => {
 
       await startAgentRun(1, 'pr');
 
-      expect(rebaseOnMain).toHaveBeenCalledWith('/path/to/project', 1);
+      expect(rebaseOnMain).toHaveBeenCalledWith('/path/to/project', 1, { projectId: 1 });
       expect(startConversation).toHaveBeenCalledWith(
         1,
         'pr message',
@@ -615,7 +615,7 @@ describe('agentRunner', () => {
 
       await startAgentRun(1, 'pr');
 
-      expect(rebaseOnMain).toHaveBeenCalledWith('/path/to/project', 1);
+      expect(rebaseOnMain).toHaveBeenCalledWith('/path/to/project', 1, { projectId: 1 });
       expect(startConversation).toHaveBeenCalledWith(1, 'pr message', expect.any(Object));
     });
   });

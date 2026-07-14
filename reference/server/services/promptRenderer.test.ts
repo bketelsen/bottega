@@ -108,7 +108,7 @@ describe('promptRenderer', () => {
     it('returns labels and variables', () => {
       const def = getPromptDefinition('pr');
       expect(def!.label).toBe('PR Agent');
-      expect(def!.variables).toContain('prCreateOrVerifyBlock');
+      expect(def!.variables).toEqual(['taskDocPath', 'taskId', 'prContextLine']);
     });
 
     it('marks plan-template as a template kind with no variables', () => {
@@ -187,16 +187,30 @@ describe('promptRenderer', () => {
       expect(out).toContain('Start implementing now.');
     });
 
-    it('renders the pr prompt with the inlined PR/CI block', () => {
+    it('renders the pr prompt with the server-owned publication invariant', () => {
       const out = renderPrompt('pr', {
         taskDocPath: '/x/y.md',
         taskId: 99,
         prContextLine: '- No PR exists yet',
-        prCreateOrVerifyBlock: '### 1. CREATE BLOCK CONTENT',
       });
-      expect(out).toContain('### 1. CREATE BLOCK CONTENT');
+      expect(out).toContain('Mandatory Server-Owned Publication Invariant');
       expect(out).toContain('complete-pr.ts 99');
-      expect(out).toContain('gh pr checks');
+      expect(out).not.toMatch(/\bgh\s/);
+      expect(out).not.toMatch(/git\s+(?:push|fetch)\b/);
+    });
+
+    it('appends the invariant after a PR-family override', () => {
+      saveOverride('pr-feedback', 'UNSAFE CUSTOM TEXT {{taskId}}');
+      const out = renderPrompt('pr-feedback', {
+        taskDocPath: '/x/y.md',
+        taskId: 99,
+        prUrl: 'https://example.test/pr/1',
+        feedbackSection: 'feedback',
+      });
+      expect(out.indexOf('UNSAFE CUSTOM TEXT')).toBeLessThan(
+        out.indexOf('Mandatory Server-Owned Publication Invariant'),
+      );
+      expect(out.match(/complete-pr\.ts 99/g)).toHaveLength(1);
     });
   });
 

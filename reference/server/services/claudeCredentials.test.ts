@@ -24,6 +24,15 @@ describe('claudeCredentials', () => {
   let originalAnthropicApiKey: string | undefined;
   let originalAnthropicAuthToken: string | undefined;
   let originalClaudeCodeOauthToken: string | undefined;
+  const GITHUB_ENV_KEYS = [
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'GH_ENTERPRISE_TOKEN',
+    'GITHUB_ENTERPRISE_TOKEN',
+    'SSH_AUTH_SOCK',
+    'GH_CONFIG_DIR',
+  ] as const;
+  const savedGitHubEnv: Record<string, string | undefined> = {};
 
   beforeEach(() => {
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ccui-claude-creds-'));
@@ -32,6 +41,7 @@ describe('claudeCredentials', () => {
     originalAnthropicAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
     originalClaudeCodeOauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     process.env.CLAUDE_CONFIG_ROOT = tempRoot;
+    for (const key of GITHUB_ENV_KEYS) savedGitHubEnv[key] = process.env[key];
   });
 
   afterEach(() => {
@@ -59,6 +69,11 @@ describe('claudeCredentials', () => {
       delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     } else {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = originalClaudeCodeOauthToken;
+    }
+    for (const key of GITHUB_ENV_KEYS) {
+      const value = savedGitHubEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
     }
   });
 
@@ -143,6 +158,25 @@ describe('claudeCredentials', () => {
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-spawn-token');
     expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
     expect(env).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
+  });
+
+  it('isolates GitHub credentials for SDK, model, and login subprocesses', () => {
+    provisionToken(42);
+    for (const key of GITHUB_ENV_KEYS) process.env[key] = `host-${key}`;
+
+    for (const env of [buildClaudeSdkEnv(42), buildClaudeSpawnEnv(42), buildClaudeLoginEnv(42)]) {
+      expect(env['GH_CONFIG_DIR']).toBe(path.join(tempRoot, '42', 'gh'));
+      expect(fs.readdirSync(env['GH_CONFIG_DIR']!)).toEqual([]);
+      expect(env['GH_TOKEN']).toBeUndefined();
+      expect(env['GITHUB_TOKEN']).toBeUndefined();
+      expect(env['GH_ENTERPRISE_TOKEN']).toBeUndefined();
+      expect(env['GITHUB_ENTERPRISE_TOKEN']).toBeUndefined();
+      expect(env['SSH_AUTH_SOCK']).toBeUndefined();
+      expect(env['GIT_CONFIG_GLOBAL']).toBe('/dev/null');
+      expect(env['GIT_CONFIG_SYSTEM']).toBe('/dev/null');
+      expect(env['GIT_TERMINAL_PROMPT']).toBe('0');
+      expect(env['GIT_SSH_COMMAND']).toBe('ssh -F /dev/null -o IdentityFile=none -o IdentitiesOnly=yes -o BatchMode=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes');
+    }
   });
 
   it('prepares a private per-user Claude config directory for the login subprocess', () => {

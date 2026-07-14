@@ -37,19 +37,83 @@ agents, plan comments, or PR repair runs.
 The Bottega host must have:
 
 - A local checkout configured as the project's repository folder.
-- GitHub CLI (`gh`) installed and authenticated as the account Bottega uses for
-  GitHub reads and mutations.
+- A configured server-side GitHub authentication mode. In App mode, trusted
+  server code uses repository-scoped installation credentials; model processes
+  do not receive those credentials.
 - Network access to GitHub.
-- A `GITHUB_WEBHOOK_SECRET` shared with the repository webhook for low-latency
-  event delivery.
+- A `GITHUB_WEBHOOK_SECRET` shared with the configured App or repository webhook
+  for low-latency event delivery.
 
 The project owner must be an active Bottega user with agent model settings and
-credentials for every configured provider. Projects using the `pr` or
-`automerge` tier also require a Git name and email for the owner. Bottega checks
-these prerequisites before an administrator can enable automation.
+credentials for every configured provider. In legacy host mode, projects using
+the `pr` or `automerge` tier also require a Git name and email for the owner. App
+mode uses the App bot's commit identity instead. Bottega checks these
+prerequisites before an administrator can enable automation.
 
 An existing task keeps its task owner's provider credentials and model
 settings. A task imported directly from GitHub is owned by the project owner.
+
+## GitHub App Setup
+
+Use one private GitHub App per Bottega deployment. The App can be installed on
+multiple organizations or accounts and can serve multiple selected
+repositories. Do not create a separate App or configure a global installation
+ID for each project.
+
+1. In GitHub, create a GitHub App and set its homepage URL to the Bottega
+   deployment URL.
+2. Set the webhook URL to
+   `https://<bottega-host>/api/webhooks/github`, create a random webhook secret,
+   and enable webhook delivery.
+3. Grant repository permissions for **Contents: Read and write**, **Issues: Read
+   and write**, **Pull requests: Read and write**, **Checks: Read**, and **Commit
+   statuses: Read**. Metadata read access is included automatically. Grant
+   **Workflows: Read and write** only when Bottega is allowed to publish changes
+   under `.github/workflows/`.
+4. Subscribe to **Issues**, **Issue comments**, **Pull requests**, **Pull request
+   reviews**, **Pull request review comments**, **Check runs**, **Check suites**,
+   and **Repository** events. Installation lifecycle and repository-selection
+   events are delivered automatically.
+5. Install the App and select only repositories that Bottega may automate.
+6. Generate an RSA private key. Store the downloaded PEM outside the repository,
+   owned by the Bottega service account, and set its mode to `0600` in
+   production.
+7. Configure the deployment environment and restart Bottega:
+
+```dotenv
+GITHUB_AUTH_MODE=app
+GITHUB_APP_CLIENT_ID=Iv1.example
+# GITHUB_APP_ID=123456  # JWT issuer fallback when client ID is unavailable
+GITHUB_APP_PRIVATE_KEY_PATH=/var/lib/bottega/github-app.pem
+BOTTEGA_EXTERNAL_URL=https://bottega.example.com
+GITHUB_WEBHOOK_SECRET=<same-secret-configured-on-the-app>
+```
+
+`BOTTEGA_EXTERNAL_URL` and `GITHUB_WEBHOOK_SECRET` are an optional pair. Omitting
+both leaves App authentication available in polling-only mode and reports
+degraded webhook health; configuring only one is an error. App configuration is
+read at startup and changes require a restart.
+
+After restart, check **Admin > GitHub App** or request
+`GET /api/admin/github-app/health`. The response identifies configuration and
+permission problems without exposing the private key or installation tokens.
+For each existing project, open GitHub automation settings and save or re-enable
+automation. This verifies the repository, discovers its installation, and
+persists canonical repository and installation IDs. A project is App-ready only
+when both IDs match GitHub.
+
+For a production cutover, create and install the App while
+`GITHUB_AUTH_MODE=host` remains active. Then switch to `app`, restart, confirm
+the admin health indicator, and verify every enabled project through its
+project settings. Keep the host credentials available only for rollback until
+these checks pass. Then remove host `GH_TOKEN`/`GITHUB_TOKEN`, Git credential
+helpers, and SSH keys from the service account. Provider subprocesses never
+receive App credentials in either mode.
+
+To roll back during the compatibility period, set `GITHUB_AUTH_MODE=host`,
+restore the service account's host GitHub credentials, and restart. Do not
+delete stored repository or installation IDs; they can be reused after the App
+configuration is repaired.
 
 ## Project Configuration
 
@@ -85,10 +149,10 @@ capability for a future merge policy; setting it does not make Bottega merge a
 pull request.
 
 Capabilities are checked before optional work starts and again immediately
-before application-owned push and PR effects. The automation switch and tiers
-are operational policy controls, not a security sandbox: agents have shell
-access and may have ambient host credentials. Strong isolation requires
-restricted tools, isolated credentials, or a sandbox outside this feature.
+before application-owned publication effects. PR agents edit and test locally,
+then explicitly mark their run ready. Trusted server code alone performs remote
+Git and pull-request operations after those checks. Shell isolation remains a
+separate defense against unrelated ambient host credentials.
 
 ## Issue Workflow
 
@@ -115,8 +179,9 @@ The normal flow is:
    Bottega starts implementation and removes the approval labels. At a lower
    tier, the task waits for manual execution.
 6. The normal implementation, review, and refinement agents operate on the
-   task worktree. The PR agent then pushes the branch, creates or updates the
-   pull request, and links it to the task.
+   task worktree. The server commits and publishes the initial branch, creates
+   or finds the pull request, links it to the task, and only then starts a PR
+   repair agent with current evidence.
 
 An unlabeled issue is never imported merely because someone comments on it.
 Bot-authored and Bottega-authored comments are excluded from human feedback.
@@ -148,9 +213,21 @@ human or GitHub-side automation must resolve the thread. New commits change the
 evidence hash, so the workflow run cap is the final guard against standing
 feedback causing an unbounded repair loop.
 
+PR repair agents do not query GitHub or publish changes. They consume evidence
+already captured in the task document, edit and test the local worktree, and
+invoke `complete-pr.ts` exactly once only when all requested work and local
+verification pass. Successful agent completion plus that run-scoped readiness
+signal allows the server finalizer to commit and publish the repair. Incomplete
+work, failed tests, aborted runs, and ordinary conversations cannot request
+finalization. The task-detail **Fix CI** action starts this real PR agent run.
+
 ## Webhook Setup
 
-Create a repository webhook with:
+In App mode, configure the webhook on the GitHub App as described in
+**GitHub App Setup**. The same App-level endpoint receives repository events
+from every installation; do not create duplicate repository webhooks.
+
+In legacy host mode, create a repository webhook with:
 
 - **Payload URL**: `https://<bottega-host>/api/webhooks/github`
 - **Content type**: `application/json`
@@ -170,7 +247,8 @@ GET /api/webhooks/health
 ```
 
 The response reports whether the webhook secret is configured; it does not
-test GitHub authentication or delivery reachability.
+test GitHub authentication or delivery reachability. In App mode, use
+`GET /api/admin/github-app/health` as the separate authentication health check.
 
 ## Recovery Polling
 
@@ -210,14 +288,16 @@ burst of full GitHub reads.
 If an issue or PR does not trigger work:
 
 1. Confirm the project repository identity matches the webhook repository.
-2. Confirm automation is enabled and the tier permits the requested effect.
-3. Confirm `gh auth status` succeeds for the Bottega server account.
-4. Confirm the project owner still has valid provider credentials and model
+2. In App mode, confirm the App is installed on the repository and the project
+   settings report matching repository and installation IDs.
+3. Confirm automation is enabled and the tier permits the requested effect.
+4. Confirm the configured server-side GitHub authentication mode is healthy.
+5. Confirm the project owner still has valid provider credentials and model
    settings.
-5. Check `GET /api/webhooks/health` and GitHub's webhook delivery history.
-6. Confirm the expected label or actionable PR evidence is still present.
-7. Check whether the task is completed, blocked, missing its worktree, already
+6. Check `GET /api/webhooks/health` and GitHub's webhook delivery history.
+7. Confirm the expected label or actionable PR evidence is still present.
+8. Check whether the task is completed, blocked, missing its worktree, already
    running an agent, or at the workflow run limit.
-8. Wait for recovery polling or restart the server to schedule an initial scan.
+9. Wait for recovery polling or restart the server to schedule an initial scan.
 
 Re-delivering a webhook is safe; reconciliation is designed to be idempotent.

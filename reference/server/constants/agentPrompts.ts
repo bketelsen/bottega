@@ -8,7 +8,7 @@
  * to change agent behavior without touching code.
  */
 
-import { renderPrompt, resolvePromptPath } from '../services/promptRenderer.js';
+import { renderPrompt, resolvePromptPath, resolveScriptPath } from '../services/promptRenderer.js';
 
 interface FileContext {
   path?: string;
@@ -36,29 +36,6 @@ interface ReviewWebhookContext {
   comments?: ReviewComment[];
 }
 
-/**
- * Pre-rendered {{prCreateOrVerifyBlock}} — the "create a new PR" vs "verify the
- * existing PR" opening step of the PR/CI procedure inlined into pr.md and yolo.md.
- */
-function buildPrCreateOrVerifyBlock(taskId: number, prUrl: string | null | undefined): string {
-  if (prUrl) {
-    return `### 1. Verify PR Exists
-A PR already exists at ${prUrl}. Skip to step 2.`;
-  }
-  return `### 1. Create PR
-Create a PR for this task:
-1. Check for uncommitted changes: \`git status\`
-2. If changes exist, commit them with a concise message describing the task: \`git add -A && git commit -m "Implement <short task title>"\`
-3. Verify there are commits ahead of the base branch: \`git log origin/main..HEAD --oneline\`
-   - **If no commits ahead** (and no uncommitted changes were found in step 1): there is nothing to submit. Run the completion script and stop:
-   \`\`\`bash
-   tsx /home/ubuntu/bottega/reference/scripts/complete-pr.ts ${taskId}
-   \`\`\`
-4. Push to origin: \`git push -u origin $(git branch --show-current)\`
-5. Create PR with a short specific title and concise summary body. Replace the placeholders with the actual task title and implementation summary:
-   \`gh pr create --title "<short task title>" --body "Summary: <what the task does and how this implementation solves it. Keep this to a short paragraph. Task: #${taskId}>"\``;
-}
-
 export async function generatePlanificationMessage(
   taskDocPath: string,
   taskId: number,
@@ -66,7 +43,8 @@ export async function generatePlanificationMessage(
 ): Promise<string> {
   const promptName = isTechnical ? 'planification' : 'planification-nontechnical';
   const planTemplatePath = resolvePromptPath('plan-template');
-  return renderPrompt(promptName, { taskDocPath, taskId, planTemplatePath });
+  const completePlanCommand = `tsx ${JSON.stringify(resolveScriptPath('complete-plan.ts'))} ${taskId}`;
+  return renderPrompt(promptName, { taskDocPath, taskId, planTemplatePath, completePlanCommand });
 }
 
 export async function generateImplementationMessage(
@@ -94,9 +72,8 @@ export async function generatePrAgentMessage(
 ): Promise<string> {
   const prContextLine = prUrl
     ? `- Existing PR: ${prUrl}`
-    : '- No PR exists yet - you need to create one';
-  const prCreateOrVerifyBlock = buildPrCreateOrVerifyBlock(taskId, prUrl);
-  return renderPrompt('pr', { taskDocPath, taskId, prContextLine, prCreateOrVerifyBlock });
+    : '- No PR is linked yet; the server owns initial publication';
+  return renderPrompt('pr', { taskDocPath, taskId, prContextLine });
 }
 
 export async function generateYoloMessage(
@@ -106,9 +83,8 @@ export async function generateYoloMessage(
 ): Promise<string> {
   const prContextLine = prUrl
     ? `- Existing PR: ${prUrl}`
-    : '- No PR exists yet - you will create one at the end';
-  const prCreateOrVerifyBlock = buildPrCreateOrVerifyBlock(taskId, prUrl);
-  return renderPrompt('yolo', { taskDocPath, taskId, prContextLine, prCreateOrVerifyBlock });
+    : '- No PR is linked yet; the server owns publication after this workflow';
+  return renderPrompt('yolo', { taskDocPath, taskId, prContextLine });
 }
 
 export async function generatePrAgentCommentMessage(

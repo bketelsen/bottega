@@ -4,6 +4,7 @@ import type { UnifiedMessage } from '@shared/providers/types';
 vi.mock('../../database/db.js', () => ({
   tasksDb: {
     getWithProject: vi.fn(),
+    getById: vi.fn(),
   },
   conversationsDb: {
     create: vi.fn(),
@@ -72,7 +73,7 @@ vi.mock('./slashCommands.js', () => ({
   resolveSlashCommand: vi.fn(async (m: string | null) => m),
 }));
 
-import { tasksDb, conversationsDb } from '../../database/db.js';
+import { tasksDb, conversationsDb, agentRunsDb } from '../../database/db.js';
 import { codexProvider } from '../providers/openai/index.js';
 import { startCodexConversation, sendCodexMessage } from './startCodexConversation.js';
 
@@ -177,7 +178,7 @@ describe('startCodexConversation', () => {
         id: 'result',
         provider: 'openai',
         providerSessionId: SID,
-        raw: null,
+        raw: { type: 'turn.completed' },
         isError: false,
         usage: { input_tokens: 1, output_tokens: 2 },
       },
@@ -220,7 +221,7 @@ describe('startCodexConversation', () => {
         id: 'r',
         provider: 'openai',
         providerSessionId: SID,
-        raw: null,
+        raw: { type: 'turn.completed' },
         isError: false,
       },
     ];
@@ -286,7 +287,7 @@ describe('startCodexConversation', () => {
         id: 'r',
         provider: 'openai',
         providerSessionId: SID,
-        raw: null,
+        raw: { type: 'turn.completed' },
         isError: false,
       },
     ];
@@ -324,7 +325,7 @@ describe('startCodexConversation', () => {
         id: 'r',
         provider: 'openai',
         providerSessionId: SID,
-        raw: null,
+        raw: { type: 'turn.completed' },
         isError: false,
       },
     ]);
@@ -344,5 +345,36 @@ describe('startCodexConversation', () => {
 
     const callArg = vi.mocked(codexProvider.startTurn).mock.calls[0]![0];
     expect(callArg.env).toEqual({ CODEX_HOME: '/fake', HOME: '/h', PATH: '/p' });
+  });
+
+  it('marks a running agent failed when the stream ends without turn.completed', async () => {
+    vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+      { id: 9, conversation_id: 11, agent_type: 'implementation', status: 'running' },
+    ] as never);
+    const fakeRun = buildFakeRun([{
+      type: 'system',
+      id: 'thread_started',
+      provider: 'openai',
+      providerSessionId: SID,
+      raw: { type: 'thread.started' },
+      subtype: 'thread_started',
+    }]);
+    vi.mocked(codexProvider.startTurn).mockResolvedValueOnce({
+      providerSessionId$: fakeRun.providerSessionId$,
+      abort: fakeRun.abort,
+      pid: null,
+      events: fakeRun.events(),
+    });
+
+    await startCodexConversation(1, 'hi', {
+      userId: 1,
+      provider: 'openai',
+      model: 'gpt-5.5',
+      broadcastFn,
+    });
+    await waitForBroadcast(broadcastFn, 'streaming-ended');
+
+    expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(9, 'failed');
+    expect(broadcastFn).not.toHaveBeenCalledWith(11, expect.objectContaining({ type: 'claude-complete' }));
   });
 });

@@ -1071,6 +1071,159 @@ describe('Database Layer - Phase 1', () => {
         expect(fetched!.conversation_id).toBeNull();
       });
     });
+
+    describe('GitHub finalization', () => {
+      it('marks only the latest currently running PR run ready with deterministic ordering', () => {
+        const oldPr = agentRunsDb.create(testTaskId, 'pr');
+        const nonPr = agentRunsDb.create(testTaskId, 'review');
+        const latestPr = agentRunsDb.create(testTaskId, 'pr');
+        testDb.db.prepare(
+          `UPDATE task_agent_runs SET created_at = '2026-01-01 00:00:00' WHERE task_id = ?`,
+        ).run(testTaskId);
+
+        const ready = agentRunsDb.markLatestRunningPrReady(testTaskId);
+
+        expect(ready?.id).toBe(latestPr.id);
+        expect(ready?.github_finalize_status).toBe('ready');
+        expect(agentRunsDb.getById(oldPr.id)?.github_finalize_status).toBe('none');
+        expect(agentRunsDb.getById(nonPr.id)?.github_finalize_status).toBe('none');
+        expect(agentRunsDb.getLatestPrRun(testTaskId)?.id).toBe(latestPr.id);
+      });
+
+      it('ignores completed PR runs and is idempotent for active finalization states', () => {
+        const completed = agentRunsDb.create(testTaskId, 'pr');
+        agentRunsDb.updateStatus(completed.id, 'completed');
+        expect(agentRunsDb.markLatestRunningPrReady(testTaskId)).toBeUndefined();
+
+        const current = agentRunsDb.create(testTaskId, 'pr');
+        expect(agentRunsDb.markLatestRunningPrReady(testTaskId)?.github_finalize_status).toBe('ready');
+        expect(agentRunsDb.markLatestRunningPrReady(testTaskId)?.id).toBe(current.id);
+        expect(agentRunsDb.claimGitHubFinalization(current.id)?.github_finalize_status).toBe('finalizing');
+        expect(agentRunsDb.markLatestRunningPrReady(testTaskId)?.github_finalize_status).toBe('finalizing');
+        expect(agentRunsDb.recordGitHubFinalized(current.id, 'abc123')?.github_finalize_status).toBe('finalized');
+        expect(agentRunsDb.markLatestRunningPrReady(testTaskId)?.github_finalize_status).toBe('finalized');
+      });
+
+      it('claims ready or failed runs with compare-and-set semantics', () => {
+        const run = agentRunsDb.create(testTaskId, 'pr');
+        agentRunsDb.markLatestRunningPrReady(testTaskId);
+
+        expect(agentRunsDb.claimGitHubFinalization(run.id)?.github_finalize_started_at).not.toBeNull();
+        expect(agentRunsDb.claimGitHubFinalization(run.id)).toBeUndefined();
+        expect(agentRunsDb.recordGitHubFinalizeFailure(run.id, 'network failure')?.github_finalize_status)
+          .toBe('failed');
+        expect(agentRunsDb.claimGitHubFinalization(run.id)?.github_finalize_status).toBe('finalizing');
+      });
+
+      it('does not set readiness when the task workflow is completed manually', () => {
+        const run = agentRunsDb.create(testTaskId, 'pr');
+
+        tasksDb.update(testTaskId, { workflow_complete: 1 });
+
+        expect(agentRunsDb.getById(run.id)?.github_finalize_status).toBe('none');
+      });
+
+      it('reclaims only expired finalizing leases', () => {
+        const run = agentRunsDb.create(testTaskId, 'pr');
+        agentRunsDb.markLatestRunningPrReady(testTaskId);
+        agentRunsDb.claimGitHubFinalization(run.id);
+        testDb.db.prepare(
+          `UPDATE task_agent_runs SET github_finalize_started_at = '2026-01-01 00:00:00' WHERE id = ?`,
+        ).run(run.id);
+
+        expect(agentRunsDb.reclaimStaleGitHubFinalization(
+          run.id,
+          60_000,
+          new Date('2026-01-01T00:00:30.000Z'),
+        )).toBeUndefined();
+        const reclaimed = agentRunsDb.reclaimStaleGitHubFinalization(
+          run.id,
+          60_000,
+          new Date('2026-01-01T00:02:00.000Z'),
+        );
+        expect(reclaimed?.github_finalize_status).toBe('finalizing');
+        expect(reclaimed?.github_finalize_started_at).toBe('2026-01-01T00:02:00.000Z');
+      });
+
+      it('finds only bounded latest completed recovery candidates for one project', () => {
+        const readyTask = tasksDb.create(testProjectId, 'Ready');
+        const failedTask = tasksDb.create(testProjectId, 'Failed');
+        const staleTask = tasksDb.create(testProjectId, 'Stale');
+        const freshTask = tasksDb.create(testProjectId, 'Fresh');
+        const obsoleteTask = tasksDb.create(testProjectId, 'Obsolete');
+        const nonCompletedTask = tasksDb.create(testProjectId, 'Running');
+        const finalizedTask = tasksDb.create(testProjectId, 'Finalized');
+        const otherProject = projectsDb.create(testUserId, 'Other', '/path/other');
+        const otherTask = tasksDb.create(otherProject.id, 'Other project');
+        const createCompleted = (taskId: number, finalizeStatus: string) => {
+          const run = agentRunsDb.create(taskId, 'pr');
+          agentRunsDb.updateStatus(run.id, 'completed');
+          testDb.db.prepare(
+            `UPDATE task_agent_runs SET github_finalize_status = ? WHERE id = ?`,
+          ).run(finalizeStatus, run.id);
+          return run;
+        };
+
+        const ready = createCompleted(readyTask.id, 'ready');
+        const failed = createCompleted(failedTask.id, 'failed');
+        const stale = createCompleted(staleTask.id, 'finalizing');
+        const fresh = createCompleted(freshTask.id, 'finalizing');
+        createCompleted(obsoleteTask.id, 'ready');
+        agentRunsDb.create(obsoleteTask.id, 'pr');
+        const nonCompleted = agentRunsDb.create(nonCompletedTask.id, 'pr');
+        testDb.db.prepare(
+          `UPDATE task_agent_runs SET github_finalize_status = 'ready' WHERE id = ?`,
+        ).run(nonCompleted.id);
+        createCompleted(finalizedTask.id, 'finalized');
+        createCompleted(otherTask.id, 'ready');
+        testDb.db.prepare(
+          `UPDATE task_agent_runs SET github_finalize_started_at = ? WHERE id = ?`,
+        ).run('2026-01-01T00:00:00.000Z', stale.id);
+        testDb.db.prepare(
+          `UPDATE task_agent_runs SET github_finalize_started_at = ? WHERE id = ?`,
+        ).run('2026-01-01T00:09:00.000Z', fresh.id);
+
+        const candidates = agentRunsDb.getRecoverableGitHubFinalizations(
+          testProjectId,
+          new Date('2026-01-01T00:05:00.000Z'),
+          100,
+        );
+
+        expect(candidates.map((run) => run.id)).toEqual([ready.id, failed.id, stale.id]);
+        expect(agentRunsDb.getRecoverableGitHubFinalizations(
+          testProjectId,
+          new Date('2026-01-01T00:05:00.000Z'),
+          2,
+        ).map((run) => run.id)).toEqual([ready.id, failed.id]);
+      });
+
+      it('records finalized SHA and redacts failed errors only from finalizing', () => {
+        const finalized = agentRunsDb.create(testTaskId, 'pr');
+        agentRunsDb.markLatestRunningPrReady(testTaskId);
+        agentRunsDb.claimGitHubFinalization(finalized.id);
+        const done = agentRunsDb.recordGitHubFinalized(finalized.id, 'deadbeef');
+        expect(done).toMatchObject({
+          github_finalize_status: 'finalized',
+          github_finalize_head_sha: 'deadbeef',
+          github_finalize_error: null,
+          github_finalize_started_at: null,
+        });
+        expect(agentRunsDb.recordGitHubFinalized(finalized.id, 'other')).toBeUndefined();
+
+        const failed = agentRunsDb.create(testTaskId, 'pr');
+        agentRunsDb.markLatestRunningPrReady(testTaskId);
+        agentRunsDb.claimGitHubFinalization(failed.id);
+        const result = agentRunsDb.recordGitHubFinalizeFailure(
+          failed.id,
+          new Error('Bearer ghp_supersecret token=plain github_pat_hidden'),
+        );
+        expect(result?.github_finalize_status).toBe('failed');
+        expect(result?.github_finalize_error).toBe(
+          'Bearer [REDACTED] token=[REDACTED] [REDACTED]',
+        );
+        expect(result?.github_finalize_error).not.toContain('supersecret');
+      });
+    });
   });
 
 });

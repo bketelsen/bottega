@@ -2,6 +2,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import { isolateProviderGitHubEnv } from './credentials/providerEnvironment.js';
+
 const DEFAULT_CLAUDE_CONFIG_ROOT = path.join(os.homedir(), '.config', 'bottega', 'users');
 const TOKEN_FILE_NAME = 'oauth_token';
 // Per https://code.claude.com/docs/en/authentication#authentication-precedence
@@ -236,18 +238,25 @@ export interface ClaudeSdkEnv extends Record<string, string | undefined> {
   ANTHROPIC_AUTH_TOKEN: undefined;
 }
 
+function isolateClaudeGitHubEnv(
+  userId: number | string | undefined,
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  return isolateProviderGitHubEnv(env, path.join(resolveClaudeUserDir(userId), 'gh'));
+}
+
 // Sparse env handed to the SDK's `query({ options: { env } })`. The token is
 // scoped to inference per the docs (no Remote Control), which matches our use.
 export function buildClaudeSdkEnv(userId: number | string | undefined): ClaudeSdkEnv {
   const { token } = readClaudeOAuthToken(userId);
 
-  return {
+  return isolateClaudeGitHubEnv(userId, {
     CLAUDE_CODE_OAUTH_TOKEN: token,
     HOME: process.env.HOME,
     PATH: process.env.PATH,
     ANTHROPIC_API_KEY: undefined,
     ANTHROPIC_AUTH_TOKEN: undefined,
-  };
+  }) as ClaudeSdkEnv;
 }
 
 // Full env for child_process.spawn('claude', …) — strips inherited auth, then
@@ -259,7 +268,7 @@ export function buildClaudeSpawnEnv(
   const env: Record<string, string | undefined> = { ...process.env };
   removeInheritedClaudeAuthEnv(env);
   env.CLAUDE_CODE_OAUTH_TOKEN = token;
-  return env;
+  return isolateClaudeGitHubEnv(userId, env);
 }
 
 // Login subprocess (`claude setup-token`) — must NOT inherit any auth, so the
@@ -288,7 +297,7 @@ export function buildClaudeLoginEnv(
     PATH: `${shimDir}:${process.env.PATH}`,
   };
   removeInheritedClaudeAuthEnv(env);
-  return env;
+  return isolateClaudeGitHubEnv(userId, env);
 }
 
 export interface ClaudeAuthStatus {

@@ -39,19 +39,17 @@ import {
   startCopilotConversation,
   sendCopilotMessage,
 } from './startCopilotConversation.js';
-import type { ConversationOptions, StreamingContext } from './types.js';
+import type { ConversationOptions, ProviderTerminationOutcome, StreamingContext } from './types.js';
 
 /**
  * Compose the streaming-complete handlers: universal broadcast + map cleanup,
  * then agent-run-aware status update / chaining / push notification.
  *
- * Neither handler takes an isError argument anymore — failure is recorded
- * separately on the agent_run row by `abortSession` (user-Stop) or
- * the server-startup orphan recovery, not derived from a boolean threaded
- * through the streaming loop.
+ * Streaming cleanup runs for every outcome; agent status and chaining use the
+ * provider's authoritative terminal outcome.
  */
-function composeOnComplete(ctx: StreamingContext): () => Promise<void> {
-  return composeAsync<void>(
+function composeOnComplete(ctx: StreamingContext): (outcome: ProviderTerminationOutcome) => Promise<void> {
+  return composeAsync<ProviderTerminationOutcome>(
     () => handleStreamingComplete(ctx),
     buildAgentRunCompletionHandler(ctx),
   );
@@ -273,7 +271,7 @@ export async function startConversation(
 
     void (async () => {
       try {
-        const { authError } = await runStreamingLoop({
+        const { authError, outcome } = await runStreamingLoop({
           queryInstance: queryInstance as never,
           conversationId: conversationId,
           broadcastFn,
@@ -311,7 +309,7 @@ export async function startConversation(
           await handleVideoRecording(ctx.videoConfig);
         }
 
-        if (broadcastFn) {
+        if (broadcastFn && outcome === 'success') {
           broadcastFn(conversationId, {
             type: 'claude-complete',
             sessionId: ctx.claudeSessionId,
@@ -320,7 +318,7 @@ export async function startConversation(
           });
         }
 
-        await composeOnComplete(ctx)();
+        await composeOnComplete(ctx)(outcome);
       } catch (error) {
         console.error('[ConversationAdapter] Streaming error:', error);
 
@@ -335,6 +333,7 @@ export async function startConversation(
 
         if (!ctx.claudeSessionId) {
           clearTimeout(timeout);
+          await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');
           reject(error instanceof Error ? error : new Error(String(error)));
           return;
         }
@@ -363,11 +362,9 @@ export async function startConversation(
           });
         }
 
-        // Run the same completion handler the success path does — the agent
-        // run row was either already marked 'failed' by abortSession (no
-        // chain) or is still 'running' and will be marked 'completed' here
-        // (chain continues, next agent picks up the recovery).
-        await composeOnComplete(ctx)();
+        // Streaming cleanup always runs; the authoritative failure outcome
+        // keeps a linked run failed and prevents chaining.
+        await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');
       } finally {
         rejectPendingAskUserQuestion(conversationId, 'streaming ended');
       }
@@ -580,7 +577,7 @@ export async function sendMessage(
   const contextUsageTracker = createContextUsageTracker({ conversationId, broadcastFn });
 
   try {
-    const { authError } = await runStreamingLoop({
+    const { authError, outcome } = await runStreamingLoop({
       queryInstance: queryInstance as never,
       conversationId,
       broadcastFn,
@@ -605,7 +602,7 @@ export async function sendMessage(
     await cleanupTempFiles(tempImagePaths, tempDir);
     await patchThinking(claudeSessionId, projectPath, userId, thinkingAcc);
 
-    if (broadcastFn) {
+    if (broadcastFn && outcome === 'success') {
       broadcastFn(conversationId, {
         type: 'claude-complete',
         sessionId: claudeSessionId,
@@ -614,7 +611,7 @@ export async function sendMessage(
       });
     }
 
-    await composeOnComplete(ctx)();
+    await composeOnComplete(ctx)(outcome);
   } catch (error) {
     console.error('[ConversationAdapter] Resume streaming error:', error);
 
@@ -640,10 +637,9 @@ export async function sendMessage(
       });
     }
 
-    // Let the completion handler decide whether to chain (based on the
-    // agent_run row's status: 'failed' → no-op, 'running' → mark
-    // 'completed' and chain).
-    await composeOnComplete(ctx)();
+    // Streaming cleanup always runs; the authoritative failure outcome keeps
+    // a linked run failed and prevents chaining.
+    await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');
 
     throw error;
   } finally {

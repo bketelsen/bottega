@@ -15,8 +15,13 @@ import {
   pushChanges,
   type GitHubEffectOptions,
 } from './worktree.js';
-import type { TaskRow } from '../database/db.js';
+import { projectsDb, tasksDb, type TaskRow } from '../database/db.js';
 import { syncTaskPullRequest } from './github/reconcile.js';
+import {
+  prepareTaskPublication,
+  withTaskPublicationLock,
+  type TaskPublicationContext,
+} from './github/finalize.js';
 
 export interface PRResult {
   success: boolean;
@@ -32,51 +37,105 @@ export interface CIStatusResult {
   error?: string | undefined;
 }
 
+export interface EnsureTaskPullRequestOptions {
+  title?: string;
+  body?: string;
+  forceWithLeaseExpectedSha?: string | undefined;
+  preparedContext?: TaskPublicationContext;
+}
+
+export async function ensureTaskPullRequest(
+  taskId: number,
+  options: EnsureTaskPullRequestOptions = {},
+): Promise<PRResult> {
+  return withTaskPublicationLock(taskId, () => ensureTaskPullRequestUnlocked(taskId, options));
+}
+
+/** Internal lock-sharing entry point used by the finalization lease owner. */
+export async function ensureTaskPullRequestUnlocked(
+  taskId: number,
+  options: EnsureTaskPullRequestOptions = {},
+): Promise<PRResult> {
+  const task = tasksDb.getWithProject(taskId);
+  if (!task) return { success: false, error: `Task ${taskId} not found` };
+  const project = projectsDb.getByIdAdmin(task.project_id);
+  if (!project) return { success: false, error: `Project ${task.project_id} not found` };
+  const context = options.preparedContext ?? await prepareTaskPublication(taskId);
+  const effects: GitHubEffectOptions = {
+    ...context.effects,
+    ...(options.forceWithLeaseExpectedSha
+      ? { forceWithLeaseExpectedSha: options.forceWithLeaseExpectedSha }
+      : {}),
+  };
+  const title = options.title ?? task.title ?? `Task #${taskId}`;
+  const body = options.body ?? '';
+
+  // Re-query after committing and again after pushing. This makes retries after
+  // a successful remote effect converge on the branch's existing open PR.
+  const changes = await hasUncommittedChanges(context.repoPath, taskId);
+  if (!changes.success) return { success: false, error: changes.error || 'Failed to inspect changes' };
+  if (changes.hasChanges) {
+    const committed = await commitAllChanges(context.repoPath, taskId, title);
+    if (!committed.success) return { success: false, error: `Failed to commit: ${committed.error}` };
+  }
+
+  let existing = await getPullRequestStatus(context.repoPath, taskId, effects);
+  if (existing.success && existing.exists && existing.state === 'OPEN' && existing.url) {
+    const pushed = await pushChanges(context.repoPath, taskId, title, effects);
+    if (!pushed.success) return { success: false, error: `Failed to push: ${pushed.error}` };
+  } else {
+    const status = await getWorktreeStatus(context.repoPath, taskId, effects);
+    if (!status.success) return { success: false, error: status.error || 'Failed to inspect worktree' };
+    if (status.ahead === 0) return { success: false, error: 'No changes to create a PR' };
+
+    // createPullRequest performs the push and guards both effects. If the
+    // process previously crashed after creating the PR, this fresh lookup
+    // avoids a duplicate create attempt.
+    existing = await getPullRequestStatus(context.repoPath, taskId, effects);
+    if (!(existing.success && existing.exists && existing.state === 'OPEN' && existing.url)) {
+      if (options.forceWithLeaseExpectedSha) {
+        const pushed = await pushChanges(context.repoPath, taskId, title, effects);
+        if (!pushed.success) return { success: false, error: `Failed to push: ${pushed.error}` };
+      }
+      const created = await worktreeCreatePR(context.repoPath, taskId, title, body, effects);
+      if (!created.success) return created;
+      existing = await getPullRequestStatus(context.repoPath, taskId, effects);
+      if (!(existing.success && existing.exists && existing.state === 'OPEN' && existing.url)) {
+        existing = {
+          success: true,
+          exists: true,
+          state: 'OPEN',
+          ...(created.url ? { url: created.url } : {}),
+        };
+      }
+    }
+  }
+
+  const url = existing.url;
+  const number = pullRequestNumber(url);
+  if (number) await syncTaskPullRequest(taskId, number);
+  tasksDb.update(taskId, { ...(number ? { github_pr_number: number } : {}), status: 'in_review' });
+  return { success: true, ...(url ? { url } : {}) };
+}
+
 /**
  * Create or update a PR for a task
  * Used by both manual button and PR agent
  */
 export async function createOrUpdatePR(
-  repoPath: string,
+  _repoPath: string,
   taskId: number,
   title: string,
   body: string,
   options: GitHubEffectOptions = {},
 ): Promise<PRResult> {
-  const existing = await getPullRequestStatus(repoPath, taskId);
-
-  // 1. Check for uncommitted changes -> commit
-  const changesResult = await hasUncommittedChanges(repoPath, taskId);
-  if (changesResult.success && changesResult.hasChanges) {
-    const commitResult = await commitAllChanges(repoPath, taskId, title);
-    if (!commitResult.success) {
-      return { success: false, error: `Failed to commit: ${commitResult.error}` };
-    }
-  }
-
-  // An open branch PR remains reusable, but local commits must reach it first.
-  // Closed and merged PRs do not prevent creating a replacement PR.
-  if (existing.success && existing.exists && existing.state === 'OPEN' && existing.url) {
-    const pushResult = await pushChanges(repoPath, taskId, title, options);
-    if (!pushResult.success) {
-      return { success: false, error: `Failed to push: ${pushResult.error}` };
-    }
-    await syncTaskPullRequest(taskId, pullRequestNumber(existing.url) ?? undefined);
-    return { success: true, url: existing.url };
-  }
-
-  // 2. Check commits ahead of main
-  const statusResult = await getWorktreeStatus(repoPath, taskId);
-  if (statusResult.success && statusResult.ahead === 0) {
-    return { success: false, error: 'No changes to create a PR' };
-  }
-
-  // 3. Create PR
-  const result = await worktreeCreatePR(repoPath, taskId, title, body, options);
-  if (result.success) {
-    await syncTaskPullRequest(taskId, pullRequestNumber(result.url) ?? undefined);
-  }
-  return result;
+  return ensureTaskPullRequest(taskId, {
+    title,
+    body,
+    ...(options.forceWithLeaseExpectedSha
+      ? { forceWithLeaseExpectedSha: options.forceWithLeaseExpectedSha }
+      : {}),
+  });
 }
 
 function pullRequestNumber(url: string | undefined): number | null {
@@ -92,7 +151,11 @@ export async function getCIStatusWithDetails(
   repoPath: string,
   taskId: number,
 ): Promise<CIStatusResult> {
-  const prStatus = await getPullRequestStatus(repoPath, taskId);
+  const task = tasksDb.getWithProject(taskId);
+  if (!task) return { success: false, error: `Task ${taskId} not found` };
+  const project = projectsDb.getByIdAdmin(task.project_id);
+  if (!project) return { success: false, error: `Project ${task.project_id} not found` };
+  const prStatus = await getPullRequestStatus(repoPath, taskId, { projectId: project.id });
   if (!prStatus.success || !prStatus.exists) {
     return { success: false, error: 'No PR found' };
   }
