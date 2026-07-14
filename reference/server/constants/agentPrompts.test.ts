@@ -6,6 +6,9 @@ import {
   generateYoloMessage,
   generatePrAgentMessage,
   generatePlanificationMessage,
+  generateImplementationMessage,
+  generateReviewMessage,
+  generateRefinementMessage,
   generatePrAgentCommentMessage,
   generatePrAgentReviewMessage,
 } from './agentPrompts.js';
@@ -31,6 +34,22 @@ function expectCredentialFreeReadiness(message: string, taskId: number): void {
   expect(message).toContain('any required test fails');
   expectCommandOnce(message, resolveScriptCommand('complete-pr.ts', taskId));
 }
+
+describe('workflow prompt portability', () => {
+  it('does not embed a fixed installation path', async () => {
+    const messages = await Promise.all([
+      generatePlanificationMessage('/repo/task.md', 42),
+      generateImplementationMessage('/repo/task.md', 42),
+      generateReviewMessage('/repo/task.md', 42),
+      generateRefinementMessage('/repo/task.md', 42),
+      generatePrAgentMessage('/repo/task.md', 42, null),
+      generateYoloMessage('/repo/task.md', 42, null),
+    ]);
+    for (const message of messages) {
+      expect(message).not.toContain('/home/ubuntu');
+    }
+  });
+});
 
 describe('generateYoloMessage', () => {
   const taskDocPath = '/repo/.bottega/tasks/task-42.md';

@@ -270,10 +270,17 @@ export function resolveScriptPath(name: string): string {
   return path.join(SCRIPTS_ROOT, name);
 }
 
+function shellQuote(value: unknown): string {
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
 export function resolveScriptCommand(name: string, ...args: unknown[]): string {
-  return [process.execPath, TSX_CLI_PATH, resolveScriptPath(name), ...args]
-    .map((part) => JSON.stringify(String(part)))
+  const command = [process.execPath, TSX_CLI_PATH, resolveScriptPath(name), ...args]
+    .map(shellQuote)
     .join(' ');
+  return process.env.DATABASE_PATH
+    ? `DATABASE_PATH=${shellQuote(process.env.DATABASE_PATH)} ${command}`
+    : command;
 }
 
 export function saveOverride(name: string, content: string): number {

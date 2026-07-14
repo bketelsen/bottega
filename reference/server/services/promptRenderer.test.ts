@@ -273,4 +273,19 @@ describe('promptRenderer', () => {
       expect(p).toMatch(/server\/constants\/templates\/plan-template\.md$/);
     });
   });
+
+  describe('resolveScriptCommand', () => {
+    it('carries a custom database path into provider subprocesses', () => {
+      const previousDatabasePath = process.env.DATABASE_PATH;
+      process.env.DATABASE_PATH = "/tmp/bottega's data.db";
+      try {
+        const command = resolveScriptCommand('complete-plan.ts', 42);
+        expect(command).toContain(`DATABASE_PATH='/tmp/bottega'"'"'s data.db'`);
+        expect(command).toContain("/scripts/complete-plan.ts' '42'");
+      } finally {
+        if (previousDatabasePath === undefined) delete process.env.DATABASE_PATH;
+        else process.env.DATABASE_PATH = previousDatabasePath;
+      }
+    });
+  });
 });
