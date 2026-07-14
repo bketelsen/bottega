@@ -9,6 +9,7 @@ vi.mock('../../database/db.js', () => ({
     getByGithubIssue: vi.fn(),
     getByGithubPr: vi.fn(),
     update: vi.fn(),
+    markPrAgentComplete: vi.fn(),
     blockWorkflow: vi.fn(),
   },
   agentRunsDb: { getByTask: vi.fn().mockReturnValue([]) },
@@ -297,6 +298,7 @@ describe('repository recovery', () => {
     body: '',
     url: 'https://github.com/acme/repo/pull/55',
     state: 'open',
+    merged: false,
     headSha: 'abc',
     linkedIssueNumber: null,
     mergeable: 'mergeable',
@@ -318,7 +320,7 @@ describe('repository recovery', () => {
     vi.mocked(tasksDb.getByProject).mockReturnValue([{ ...task, github_pr_number: 44 }] as never);
     vi.mocked(githubClient.listOpenPullRequests).mockResolvedValue([{ number: 55 }] as never);
     vi.mocked(githubClient.getPullRequest).mockImplementation(async (_project, number) => (
-      number === 44 ? { ...quietPr, number: 44, state: 'closed' } : quietPr
+      number === 44 ? { ...quietPr, number: 44, state: 'closed', merged: false } : quietPr
     ) as never);
 
     await reconcileRepository(1);
@@ -327,6 +329,25 @@ describe('repository recovery', () => {
     expect(githubClient.listOpenPullRequests).toHaveBeenCalledWith(project, 20);
     expect(githubClient.getPullRequest).toHaveBeenCalledTimes(3);
     expect(vi.mocked(githubClient.getPullRequest).mock.calls.map((call) => call[1])).toEqual([44, 55, 55]);
+  });
+
+  it('completes a linked task when polling discovers its PR was merged', async () => {
+    vi.mocked(tasksDb.getByProject).mockReturnValue([{ ...task, github_pr_number: 44 }] as never);
+    vi.mocked(tasksDb.getByGithubPr).mockReturnValue({ ...task, github_pr_number: 44 } as never);
+    vi.mocked(githubClient.getPullRequest).mockResolvedValue({
+      ...quietPr,
+      number: 44,
+      state: 'closed',
+      merged: true,
+    } as never);
+
+    await reconcileRepository(1);
+
+    expect(tasksDb.update).toHaveBeenCalledWith(7, {
+      status: 'completed',
+      workflow_complete: 1,
+    });
+    expect(tasksDb.markPrAgentComplete).toHaveBeenCalledWith(7);
   });
 
   it('passes list snapshots through and refreshes the second side of a dual-label issue', async () => {
@@ -406,6 +427,7 @@ describe('PR reconciliation', () => {
     body: '',
     url: 'https://github.com/acme/repo/pull/44',
     state: 'open',
+    merged: false,
     headSha: 'abc',
     linkedIssueNumber: 12,
     mergeable: 'mergeable',
@@ -461,6 +483,75 @@ describe('PR reconciliation', () => {
 
     expect(tasksDb.update).toHaveBeenCalledWith(7, { github_pr_evidence_hash: null });
     expect(startAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('marks the linked task completed and removes In Review after merge', async () => {
+    vi.mocked(githubClient.replaceIssueLabels).mockResolvedValue(undefined);
+    vi.mocked(githubClient.getSelf).mockRejectedValue(new Error('identity unavailable'));
+    vi.mocked(githubClient.getPullRequest).mockResolvedValue({
+      ...pr,
+      state: 'closed',
+      merged: true,
+    } as never);
+    vi.mocked(tasksDb.getByGithubPr).mockReturnValue({
+      ...task,
+      github_pr_number: 44,
+      status: 'in_review',
+    } as never);
+
+    await expect(reconcilePullRequest(1, 44)).resolves.toBe('closed');
+
+    expect(tasksDb.update).toHaveBeenCalledWith(7, {
+      status: 'completed',
+      workflow_complete: 1,
+    });
+    expect(tasksDb.markPrAgentComplete).toHaveBeenCalledWith(7);
+    expect(githubClient.replaceIssueLabels).toHaveBeenCalledWith(project, 12, {
+      remove: ['In Review'],
+      add: [],
+    });
+    expect(startAgentRun).not.toHaveBeenCalled();
+    expect(githubClient.getSelf).not.toHaveBeenCalled();
+  });
+
+  it('does not complete the linked task when a PR closes unmerged', async () => {
+    vi.mocked(githubClient.getPullRequest).mockResolvedValue({
+      ...pr,
+      state: 'closed',
+      merged: false,
+    } as never);
+    vi.mocked(tasksDb.getByGithubPr).mockReturnValue({
+      ...task,
+      github_pr_number: 44,
+      status: 'in_review',
+    } as never);
+
+    await expect(reconcilePullRequest(1, 44)).resolves.toBe('closed');
+
+    expect(tasksDb.update).not.toHaveBeenCalled();
+    expect(githubClient.replaceIssueLabels).not.toHaveBeenCalled();
+    expect(startAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('does not repeat completion side effects for an already-terminal merged task', async () => {
+    vi.mocked(githubClient.getPullRequest).mockResolvedValue({
+      ...pr,
+      state: 'closed',
+      merged: true,
+    } as never);
+    vi.mocked(tasksDb.getByGithubPr).mockReturnValue({
+      ...task,
+      github_pr_number: 44,
+      status: 'completed',
+      workflow_complete: 1,
+      pr_agent_complete: 1,
+    } as never);
+
+    await expect(reconcilePullRequest(1, 44)).resolves.toBe('closed');
+
+    expect(tasksDb.update).not.toHaveBeenCalled();
+    expect(tasksDb.markPrAgentComplete).not.toHaveBeenCalled();
+    expect(githubClient.replaceIssueLabels).not.toHaveBeenCalled();
   });
 
   it('starts one PR agent and persists evidence only after startup', async () => {

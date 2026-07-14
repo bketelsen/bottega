@@ -386,11 +386,39 @@ async function reconcilePullRequestSnapshot(
   projectId: number,
   prNumber: number,
 ): Promise<'open' | 'closed'> {
-  const [pr, bottegaLogin] = await Promise.all([
-    githubClient.getPullRequest(project, prNumber),
-    githubIdentity.resolveLogin(),
-  ]);
-  if (pr.state !== 'open') return 'closed';
+  const pr = await githubClient.getPullRequest(project, prNumber);
+  if (pr.state !== 'open') {
+    if (pr.merged) {
+      const mergedTask = findExistingPullRequestTask(projectId, prNumber, pr);
+      if (mergedTask) {
+        if (
+          mergedTask.status === 'completed'
+          && mergedTask.workflow_complete
+          && mergedTask.pr_agent_complete
+        ) return 'closed';
+        tasksDb.update(mergedTask.id, {
+          status: 'completed',
+          workflow_complete: 1,
+        });
+        tasksDb.markPrAgentComplete(mergedTask.id);
+        if (mergedTask.github_issue_number) {
+          try {
+            await githubClient.replaceIssueLabels(project, mergedTask.github_issue_number, {
+              remove: [REVIEW_LABEL],
+              add: [],
+            });
+          } catch (error) {
+            console.error(
+              `[GitHubReconcile] Completed task ${mergedTask.id} after PR #${prNumber} merged, but label projection failed:`,
+              error,
+            );
+          }
+        }
+      }
+    }
+    return 'closed';
+  }
+  const bottegaLogin = await githubIdentity.resolveLogin();
   if (!actionablePullRequest(pr, bottegaLogin)) {
     // Evidence has been dealt with (checks green, threads resolved, …).
     // Drop the stored hash so identical evidence recurring later — e.g.

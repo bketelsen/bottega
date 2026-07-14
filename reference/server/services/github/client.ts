@@ -63,6 +63,7 @@ export interface GitHubPullRequest {
   title: string;
   body: string | null;
   state: 'open' | 'closed';
+  merged: boolean;
   draft: boolean;
   html_url: string;
   url: string;
@@ -571,6 +572,7 @@ export class GitHubClient {
     const linkedIssue = pull.body?.match(/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i)?.[1];
     return {
       ...pull,
+      merged: pull.merged === true,
       url: pull.html_url,
       mergeable: pull.mergeable === true ? 'mergeable' : pull.mergeable === false ? 'conflicting' : 'unknown',
       headSha: pull.head.sha,

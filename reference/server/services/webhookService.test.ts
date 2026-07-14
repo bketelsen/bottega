@@ -227,6 +227,13 @@ describe('webhook service', () => {
     expect(mocks.pullRequest).toHaveBeenCalledWith(7, 8);
     expect(mocks.pullRequest).toHaveBeenCalledWith(7, 9);
 
+    await dispatchGitHubWebhook('pull_request', {
+      action: 'closed',
+      pull_request: { number: 11 },
+      repository: { full_name: 'org/repo' },
+    });
+    expect(mocks.pullRequest).toHaveBeenCalledWith(7, 11);
+
     mocks.getProject.mockReturnValue({ id: 7, github_repo: 'org/repo', github_automation_enabled: 0 });
     await dispatchGitHubWebhook('pull_request', {
       action: 'reopened',

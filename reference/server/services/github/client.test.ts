@@ -304,6 +304,7 @@ describe('GitHubClient reads', () => {
       id: 4,
       number: 4,
       state: 'closed',
+      merged: true,
       body: null,
       html_url: 'https://example/4',
       mergeable: true,
@@ -313,6 +314,7 @@ describe('GitHubClient reads', () => {
 
     await expect(new GitHubClient({ runner }).getPullRequest(project(), 4)).resolves.toMatchObject({
       state: 'closed',
+      merged: true,
       checks: [],
       reviews: [],
       comments: [],
