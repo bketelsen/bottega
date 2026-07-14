@@ -28,6 +28,7 @@ export const EFFORT_LABELS: Record<string, string> = {
   high: 'High',
   xhigh: 'XHigh',
   max: 'Max',
+  ultra: 'Ultra',
 };
 
 /**

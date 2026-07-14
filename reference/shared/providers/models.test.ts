@@ -36,8 +36,16 @@ describe('shared/providers/models', () => {
       expect(OPENAI_MODELS).toEqual([]);
     });
 
-    it('exposes OpenAI efforts mirroring the SDK ModelReasoningEffort union (minimal..xhigh)', () => {
-      expect(OPENAI_EFFORTS).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh']);
+    it('exposes every effort returned by the live Codex catalog', () => {
+      expect(OPENAI_EFFORTS).toEqual([
+        'minimal',
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+        'ultra',
+      ]);
     });
 
     it('ships no hardcoded OpenCode model list — the Zen catalog is fetched live from /api/opencode-auth/models', () => {
@@ -118,10 +126,11 @@ describe('shared/providers/models', () => {
       expect(isOpenAIModel('copilot/model')).toBe(false);
     });
 
-    it('isOpenAIEffort accepts minimal..xhigh and rejects max', () => {
+    it('isOpenAIEffort accepts the complete Codex effort range', () => {
       expect(isOpenAIEffort('minimal')).toBe(true);
       expect(isOpenAIEffort('xhigh')).toBe(true);
-      expect(isOpenAIEffort('max')).toBe(false);
+      expect(isOpenAIEffort('max')).toBe(true);
+      expect(isOpenAIEffort('ultra')).toBe(true);
       expect(isOpenAIEffort(undefined)).toBe(false);
     });
 
@@ -174,7 +183,8 @@ describe('shared/providers/models', () => {
       expect(isEffortForProvider('anthropic', 'max')).toBe(true);
       expect(isEffortForProvider('anthropic', 'minimal')).toBe(false);
       expect(isEffortForProvider('openai', 'minimal')).toBe(true);
-      expect(isEffortForProvider('openai', 'max')).toBe(false);
+      expect(isEffortForProvider('openai', 'max')).toBe(true);
+      expect(isEffortForProvider('openai', 'ultra')).toBe(true);
       expect(isEffortForProvider('opencode', 'high')).toBe(false);
       expect(isEffortForProvider('opencode', 'max')).toBe(false);
       expect(isEffortForProvider('opencode', 'minimal')).toBe(false);

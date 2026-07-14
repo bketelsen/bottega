@@ -9,9 +9,9 @@
 // validation. The model-specific subsets shown in the UI come from each live
 // catalog.
 //   - Anthropic efforts: low / medium / high / xhigh / max.
-//   - OpenAI efforts: minimal / low / medium / high / xhigh
-//     (mirrors the TS Codex SDK's `ModelReasoningEffort` union — see
-//     `openai/codex/sdk/typescript/src/threadOptions.ts`).
+//   - OpenAI efforts: minimal / low / medium / high / xhigh / max / ultra.
+//     The live app-server catalog is ahead of the TypeScript SDK's narrower
+//     declaration, but the SDK passes these strings through to the CLI.
 //
 // Per docs/opencode/00-context-decisions.md § R15 + § D5 + § D6:
 //   - OpenCode models: curated subset of the Zen catalog, prefixed
@@ -30,7 +30,15 @@ export type AnthropicEffort = (typeof ANTHROPIC_EFFORTS)[number];
 export const OPENAI_MODELS = [] as const;
 export type OpenAIModel = string;
 
-export const OPENAI_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+export const OPENAI_EFFORTS = [
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
+] as const;
 export type OpenAIEffort = (typeof OPENAI_EFFORTS)[number];
 
 // The Zen catalog is owned by OpenCode (≈40 models, churned by their
