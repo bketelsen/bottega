@@ -22,7 +22,7 @@ export { BOTTEGA_COMMENT_MARKER, isBottegaComment };
 
 const ISSUE_ACTIONS = new Set(['opened', 'edited', 'labeled', 'unlabeled', 'reopened']);
 const COMMENT_ACTIONS = new Set(['created', 'edited']);
-const PR_ACTIONS = new Set(['opened', 'reopened', 'synchronize', 'ready_for_review']);
+const PR_ACTIONS = new Set(['opened', 'reopened', 'synchronize', 'ready_for_review', 'closed']);
 const REVIEW_ACTIONS = new Set(['submitted', 'edited', 'dismissed']);
 const CHECK_ACTIONS = new Set(['completed', 'rerequested', 'requested_action']);
 

@@ -18,6 +18,8 @@ For a linked and enabled project, Bottega can:
 - Start the implementation/review/refinement loop when a planned issue is
   labeled `Refined` and the project permits PR automation.
 - Link a task to its pull request and project the issue to `In Review`.
+- Mark the linked task completed and remove `In Review` when the pull request is
+  merged. Closing a pull request without merging does not complete the task.
 - Resume the PR agent for failed checks, failed commit statuses, merge
   conflicts, unresolved human review threads, or a current human
   `CHANGES_REQUESTED` review with a body.
