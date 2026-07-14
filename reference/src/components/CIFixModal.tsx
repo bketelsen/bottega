@@ -38,7 +38,7 @@ export default function CIFixModal({
 
   if (!isOpen) return null;
 
-  const canSubmit = !isSubmitting && !(provider === 'opencode' && !model);
+  const canSubmit = !isSubmitting && Boolean(model);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">

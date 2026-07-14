@@ -62,13 +62,13 @@ export function ProviderModelPicker({
         <select
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          disabled={disabled || (provider === 'opencode' && loadingOpenCodeModels)}
+          disabled={disabled || loadingOpenCodeModels}
           data-testid={`${testIdPrefix}-model-select`}
           className={SELECT_CLASS}
         >
-          {provider === 'opencode' && modelOptions.length === 0 ? (
+          {modelOptions.length === 0 ? (
             <option value="">
-              {loadingOpenCodeModels ? 'Loading models…' : 'No models — connect an OpenCode key'}
+              {loadingOpenCodeModels ? 'Loading models…' : 'No models available'}
             </option>
           ) : (
             modelOptions.map((m) => (

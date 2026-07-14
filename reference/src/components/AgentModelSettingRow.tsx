@@ -4,7 +4,6 @@
 
 import { Loader2 } from 'lucide-react';
 import {
-  MODELS_FOR_UI,
   EFFORTS_FOR_UI,
   type AgentModelSetting,
 } from '../../shared/types/agentModelSettings';
@@ -12,24 +11,14 @@ import type { AgentType } from '../../shared/types/db';
 import type { Provider } from '../../shared/providers/types';
 import type { OpenCodeModelEntry } from '../../shared/api/openCodeAuth';
 import type { CopilotModelEntry } from '../../shared/api/copilotAuth';
+import type { ClaudeModelEntry } from '../../shared/api/auth';
+import type { CodexModelEntry } from '../../shared/api/codexAuth';
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: 'Claude Code',
   openai: 'Codex',
   opencode: 'OpenCode',
   copilot: 'GitHub Copilot',
-};
-
-// Labels for the two static providers. OpenCode model labels are NOT
-// hardcoded — they're fetched live from `/api/opencode-auth/models` (the Zen
-// catalog is owned by OpenCode and ≈40 entries large; a frozen list is exactly
-// what broke Phase 12.3). See `feedback_no_guessing_external_lists`.
-export const MODEL_LABELS: Record<string, string> = {
-  sonnet: 'Sonnet',
-  opus: 'Opus',
-  'gpt-5.5': 'GPT-5.5',
-  'gpt-5.4': 'GPT-5.4',
-  'gpt-5.4-mini': 'GPT-5.4 mini',
 };
 
 export const EFFORT_LABELS: Record<string, string> = {
@@ -45,14 +34,25 @@ export const EFFORT_LABELS: Record<string, string> = {
  * Build the model `<option>` list for a setting. For OpenCode the list is the
  * live Zen catalog (falling back to "current model only" so the dropdown is
  * never blank); the persisted model is appended if it's no longer in the
- * catalog. For the static providers it's the canonical enum.
+ * catalog. The persisted model is appended if it is no longer advertised.
  */
 export function buildModelOptions(
   provider: Provider,
   currentModel: string,
   openCodeModels: OpenCodeModelEntry[] | null,
   copilotModels: CopilotModelEntry[] | null = null,
+  claudeModels: ClaudeModelEntry[] | null = null,
+  codexModels: CodexModelEntry[] | null = null,
 ): Array<{ value: string; label: string }> {
+  if (provider === 'anthropic' || provider === 'openai') {
+    const live = provider === 'anthropic' ? claudeModels : codexModels;
+    const options = (live ?? []).map((model) => ({ value: model.id, label: model.name }));
+    if (options.length === 0) options.push({ value: currentModel, label: currentModel });
+    if (!options.some((option) => option.value === currentModel)) {
+      options.push({ value: currentModel, label: `${currentModel} (not in current catalog)` });
+    }
+    return options;
+  }
   if (provider === 'copilot') {
     const live = copilotModels ?? [];
     const options: Array<{ value: string; label: string }> =
@@ -63,9 +63,6 @@ export function buildModelOptions(
       options.push({ value: currentModel, label: `${currentModel} (not in current catalog)` });
     }
     return options;
-  }
-  if (provider !== 'opencode') {
-    return MODELS_FOR_UI[provider].map((m) => ({ value: m, label: MODEL_LABELS[m] ?? m }));
   }
   const live = openCodeModels ?? [];
   const options: Array<{ value: string; label: string }> =
@@ -91,6 +88,10 @@ interface AgentModelSettingRowProps {
   isLoadingOpenCodeModels: boolean;
   copilotModels: CopilotModelEntry[] | null;
   isLoadingCopilotModels: boolean;
+  claudeModels: ClaudeModelEntry[] | null;
+  isLoadingClaudeModels: boolean;
+  codexModels: CodexModelEntry[] | null;
+  isLoadingCodexModels: boolean;
   disabled: boolean;
   onChange: (agent: AgentType, patch: Partial<AgentModelSetting>) => void;
 }
@@ -104,6 +105,10 @@ function AgentModelSettingRow({
   isLoadingOpenCodeModels,
   copilotModels,
   isLoadingCopilotModels,
+  claudeModels,
+  isLoadingClaudeModels,
+  codexModels,
+  isLoadingCodexModels,
   disabled,
   onChange,
 }: AgentModelSettingRowProps) {
@@ -113,10 +118,25 @@ function AgentModelSettingRow({
   const providerOptions: Provider[] = Array.from(
     new Set<Provider>([providerKey, ...connectedProviders]),
   );
-  const modelOptions = buildModelOptions(providerKey, setting.model, openCodeModels, copilotModels);
+  const modelOptions = buildModelOptions(
+    providerKey,
+    setting.model,
+    openCodeModels,
+    copilotModels,
+    claudeModels,
+    codexModels,
+  );
   const isLoadingDynamicModels =
+    (providerKey === 'anthropic' && isLoadingClaudeModels) ||
+    (providerKey === 'openai' && isLoadingCodexModels) ||
     (providerKey === 'opencode' && isLoadingOpenCodeModels) ||
     (providerKey === 'copilot' && isLoadingCopilotModels);
+  const selectedLiveModel = providerKey === 'anthropic'
+    ? claudeModels?.find((model) => model.id === setting.model)
+    : providerKey === 'openai'
+      ? codexModels?.find((model) => model.id === setting.model)
+      : undefined;
+  const effortOptions = selectedLiveModel?.supportedEfforts ?? EFFORTS_FOR_UI[providerKey];
 
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 text-sm py-3 border-b border-border last:border-b-0">
@@ -143,7 +163,24 @@ function AgentModelSettingRow({
         <span className="text-muted-foreground w-20 sm:w-auto shrink-0">Model</span>
         <select
           value={setting.model}
-          onChange={(e) => onChange(agentType, { model: e.target.value })}
+          onChange={(e) => {
+            const model = e.target.value;
+            const liveModel = providerKey === 'anthropic'
+              ? claudeModels?.find((entry) => entry.id === model)
+              : providerKey === 'openai'
+                ? codexModels?.find((entry) => entry.id === model)
+                : undefined;
+            onChange(agentType, {
+              model,
+              ...(liveModel
+                ? {
+                    effort: liveModel.defaultEffort
+                      ?? liveModel.supportedEfforts[0]
+                      ?? null,
+                  }
+                : {}),
+            });
+          }}
           disabled={disabled || isLoadingDynamicModels}
           data-testid={`agent-model-select-${agentType}`}
           className="flex-1 min-w-0 sm:flex-none bg-background border border-border rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
@@ -158,7 +195,7 @@ function AgentModelSettingRow({
           <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
         )}
       </label>
-      {EFFORTS_FOR_UI[providerKey].length > 0 && (
+      {effortOptions.length > 0 && (
         <label className="flex items-center gap-2 w-full sm:w-auto">
           <span className="text-muted-foreground w-20 sm:w-auto shrink-0">Effort</span>
           <select
@@ -168,7 +205,7 @@ function AgentModelSettingRow({
             data-testid={`agent-effort-select-${agentType}`}
             className="flex-1 min-w-0 sm:flex-none bg-background border border-border rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
           >
-            {EFFORTS_FOR_UI[providerKey].map((e) => (
+            {effortOptions.map((e) => (
               <option key={e} value={e}>
                 {EFFORT_LABELS[e] ?? e}
               </option>

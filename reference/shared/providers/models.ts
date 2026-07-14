@@ -1,14 +1,13 @@
-// Per-provider model + effort lists.
+// Per-provider model + effort shapes.
 //
-// These are the canonical sources for what the UI offers and what the
-// settings validator accepts. Each list is opaque to consumers — the
-// strings flow through to the SDK options-builder for the corresponding
-// provider, and there is no "common" subset between Anthropic, OpenAI, and
-// OpenCode.
+// Model catalogs are owned by each provider and fetched live for the current
+// user. Persisted model ids remain valid strings even when a provider later
+// removes them from its picker, so validation checks storage shape rather than
+// freezing an upstream catalog here.
 //
-// Per docs/tasks/codex-support.md § D2 + § D5:
-//   - Anthropic models: Sonnet, Opus (no Haiku).
-//   - OpenAI models: GPT-5.5, GPT-5.4, GPT-5.4 mini.
+// Effort values remain protocol-level unions used for persisted-value shape
+// validation. The model-specific subsets shown in the UI come from each live
+// catalog.
 //   - Anthropic efforts: low / medium / high / xhigh / max.
 //   - OpenAI efforts: minimal / low / medium / high / xhigh
 //     (mirrors the TS Codex SDK's `ModelReasoningEffort` union — see
@@ -22,14 +21,14 @@
 
 import type { Provider } from './types.js';
 
-export const ANTHROPIC_MODELS = ['sonnet', 'opus'] as const;
-export type AnthropicModel = (typeof ANTHROPIC_MODELS)[number];
+export const ANTHROPIC_MODELS = [] as const;
+export type AnthropicModel = string;
 
 export const ANTHROPIC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type AnthropicEffort = (typeof ANTHROPIC_EFFORTS)[number];
 
-export const OPENAI_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'] as const;
-export type OpenAIModel = (typeof OPENAI_MODELS)[number];
+export const OPENAI_MODELS = [] as const;
+export type OpenAIModel = string;
 
 export const OPENAI_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 export type OpenAIEffort = (typeof OPENAI_EFFORTS)[number];
@@ -98,7 +97,7 @@ export function isProvider(value: unknown): value is Provider {
 }
 
 export function isAnthropicModel(value: unknown): value is AnthropicModel {
-  return typeof value === 'string' && (ANTHROPIC_MODELS as readonly string[]).includes(value);
+  return typeof value === 'string' && value.trim().length > 0 && !value.includes('/');
 }
 
 export function isAnthropicEffort(value: unknown): value is AnthropicEffort {
@@ -106,7 +105,7 @@ export function isAnthropicEffort(value: unknown): value is AnthropicEffort {
 }
 
 export function isOpenAIModel(value: unknown): value is OpenAIModel {
-  return typeof value === 'string' && (OPENAI_MODELS as readonly string[]).includes(value);
+  return typeof value === 'string' && value.trim().length > 0 && !value.includes('/');
 }
 
 export function isOpenAIEffort(value: unknown): value is OpenAIEffort {
@@ -146,13 +145,12 @@ export function isModelForProvider(
   model: unknown,
 ): model is string {
   if (typeof model !== 'string') return false;
-  // OpenCode is the special case: the Zen catalog is owned upstream
-  // and fetched live, so we only enforce the `opencode/<id>` prefix
-  // shape. Anthropic and OpenAI use a static enum so we still gate
-  // against the canonical list.
+  // Prefixed providers keep their namespace check. Claude and Codex model ids
+  // are unprefixed opaque values returned by their authenticated live catalog.
   if (provider === 'opencode') return isOpenCodeModel(model);
   if (provider === 'copilot') return isCopilotModel(model);
-  return modelsForProvider(provider).includes(model);
+  if (provider === 'anthropic') return isAnthropicModel(model);
+  return isOpenAIModel(model);
 }
 
 /** True when `effort` is a valid effort for `provider`. */

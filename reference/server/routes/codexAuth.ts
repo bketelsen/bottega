@@ -24,6 +24,7 @@ import {
   startCodexAuthLogin,
 } from '../services/codexAuthFlow.js';
 import { seedAgentSettingsAfterConnect } from '../services/agentModelSettings.js';
+import { listCodexModels } from '../services/providers/openai/models.js';
 import { validateBody } from '../middleware/validate.js';
 import {
   PasteCodexAuthBodySchema,
@@ -35,6 +36,7 @@ import type {
   ClearCodexAuthResponse,
   StartCodexAuthResponse,
   CancelCodexAuthResponse,
+  CodexModelsResponse,
 } from '../../shared/api/codexAuth.js';
 import type { ApiError } from '../../shared/api/_common.js';
 
@@ -204,6 +206,22 @@ router.delete(
     try {
       const cleared = clearCodexAuth(req.user!.id);
       res.json({ cleared });
+    } catch (error) {
+      authErrorResponse(res as Response<CodexAuthErrorBody | ApiError>, error);
+    }
+  },
+);
+
+router.get(
+  '/models',
+  async (req: Request, res: Response<CodexModelsResponse | CodexAuthErrorBody>) => {
+    try {
+      const status = await getCodexAuthStatus(req.user!.id);
+      if (!status.authenticated) {
+        res.json({ models: [] });
+        return;
+      }
+      res.json({ models: await listCodexModels(req.user!.id) });
     } catch (error) {
       authErrorResponse(res as Response<CodexAuthErrorBody | ApiError>, error);
     }

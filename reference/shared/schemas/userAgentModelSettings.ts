@@ -12,9 +12,9 @@ import { AGENT_TYPES_WITH_SETTINGS } from '../types/agentModelSettings.js';
 import type { AgentType } from '../types/db.js';
 
 // One (provider, model, effort) triple. `model`/`effort` are validated against
-// the provider's catalog (reusing the same guards the loader uses) so a
-// cross-provider mismatch (e.g. anthropic + gpt-5.5) is rejected at the
-// boundary. effort is null when the provider has no reasoning dimension.
+// each provider's persisted storage shape. Live catalogs are intentionally not
+// frozen into this synchronous boundary; the provider remains authoritative.
+// effort is null when the provider has no reasoning dimension.
 const AgentModelSettingSchema = z
   .object({
     provider: z.enum(['anthropic', 'openai', 'opencode', 'copilot']),

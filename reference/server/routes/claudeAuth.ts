@@ -12,12 +12,14 @@ import {
   getClaudeAuthStatus,
 } from '../services/claudeCredentials.js';
 import { seedAgentSettingsAfterConnect } from '../services/agentModelSettings.js';
+import { listClaudeModels } from '../services/providers/anthropic/models.js';
 import type {
   CancelClaudeAuthResponse,
   ClaudeAuthStatusResponse,
   ClearClaudeAuthResponse,
   CompleteClaudeAuthResponse,
   StartClaudeAuthResponse,
+  ClaudeModelsResponse,
 } from '../../shared/api/auth.js';
 import { validateBody } from '../middleware/validate.js';
 import {
@@ -209,6 +211,22 @@ router.delete(
       const cleared = clearClaudeOAuthToken(req.user!.id);
       routeLog(req, 'clear-response', { cleared });
       res.json({ cleared });
+    } catch (error) {
+      authErrorResponse(res as Response<ClaudeAuthErrorBody>, error);
+    }
+  },
+);
+
+router.get(
+  '/models',
+  async (req: Request, res: Response<ClaudeModelsResponse | ClaudeAuthErrorBody>) => {
+    try {
+      const status = await getClaudeAuthStatus(req.user!.id);
+      if (!status.authenticated) {
+        res.json({ models: [] });
+        return;
+      }
+      res.json({ models: await listClaudeModels(req.user!.id) });
     } catch (error) {
       authErrorResponse(res as Response<ClaudeAuthErrorBody>, error);
     }

@@ -44,10 +44,6 @@ describe('CreateConversationBodySchema', () => {
         model: 'opencode/kimi-k2.6',
       }).success,
     ).toBe(false);
-    // openai model under anthropic
-    expect(
-      CreateConversationBodySchema.safeParse({ provider: 'anthropic', model: 'gpt-5.5' }).success,
-    ).toBe(false);
     // opencode requires the 'opencode/' prefix
     expect(
       CreateConversationBodySchema.safeParse({ provider: 'opencode', model: 'kimi-k2.6' }).success,

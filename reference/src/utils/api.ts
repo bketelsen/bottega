@@ -25,6 +25,7 @@ import type {
   CompleteClaudeAuthResponse,
   CancelClaudeAuthResponse,
   ClearClaudeAuthResponse,
+  ClaudeModelsResponse,
 } from '../../shared/api/auth';
 import type {
   ListProjectsResponse,
@@ -125,6 +126,7 @@ import type {
   ClearCodexAuthResponse,
   StartCodexAuthResponse,
   CancelCodexAuthResponse,
+  CodexModelsResponse,
 } from '../../shared/api/codexAuth';
 import type {
   ClearOpenCodeKeyResponse,
@@ -274,6 +276,8 @@ export const api = {
       authenticatedFetch<ClearClaudeAuthResponse>('/api/claude-auth', {
         method: 'DELETE',
       }),
+    models: (): TypedFetch<ClaudeModelsResponse> =>
+      authenticatedFetch<ClaudeModelsResponse>('/api/claude-auth/models'),
   },
 
   openCodeAuth: {
@@ -312,6 +316,8 @@ export const api = {
       authenticatedFetch<ClearCodexAuthResponse>('/api/codex-auth', {
         method: 'DELETE',
       }),
+    models: (): TypedFetch<CodexModelsResponse> =>
+      authenticatedFetch<CodexModelsResponse>('/api/codex-auth/models'),
   },
 
   copilotAuth: {

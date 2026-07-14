@@ -19,6 +19,15 @@ vi.mock('../utils/api', () => ({
     openCodeAuth: {
       models: vi.fn(),
     },
+    claudeAuth: {
+      models: vi.fn(),
+    },
+    codexAuth: {
+      models: vi.fn(),
+    },
+    copilotAuth: {
+      models: vi.fn(),
+    },
   },
 }));
 
@@ -47,6 +56,18 @@ const zenCatalog = {
   ],
 };
 
+const claudeCatalog = {
+  models: [
+    {
+      id: 'claude-sonnet-current',
+      name: 'Claude Sonnet',
+      description: 'Balanced model',
+      supportedEfforts: ['low', 'high'],
+      defaultEffort: 'high',
+    },
+  ],
+};
+
 describe('AgentModelsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -60,6 +81,9 @@ describe('AgentModelsTab', () => {
       ((settings: Record<string, AgentModelSetting>) => fakeRes(200, { settings })),
     );
     vi.mocked(api.openCodeAuth.models).mockReturnValue(fakeRes(200, zenCatalog));
+    vi.mocked(api.claudeAuth.models).mockReturnValue(fakeRes(200, claudeCatalog));
+    vi.mocked(api.codexAuth.models).mockReturnValue(fakeRes(200, { models: [] }));
+    vi.mocked(api.copilotAuth.models).mockReturnValue(fakeRes(200, { models: [] }));
   });
 
   it('renders a row per agent', async () => {
@@ -108,5 +132,12 @@ describe('AgentModelsTab', () => {
     expect(saved.planification).toEqual({ provider: 'opencode', model: 'opencode/kimi-k2.6', effort: null });
     // Other agents are unchanged in the full-object save.
     expect(saved.review?.provider).toBe('anthropic');
+  });
+
+  it('renders the authenticated Claude catalog instead of a static model list', async () => {
+    render(<AgentModelsTab />);
+    await waitFor(() => expect(api.claudeAuth.models).toHaveBeenCalled());
+    const model = await screen.findByTestId('agent-model-select-planification');
+    expect(model.querySelector('option[value="claude-sonnet-current"]')).not.toBeNull();
   });
 });

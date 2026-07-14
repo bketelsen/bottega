@@ -21,6 +21,8 @@ import {
 import { getCredentialStore } from './credentials/registry.js';
 import { listOpenCodeModels } from './providers/opencode/index.js';
 import { listCopilotModels } from './providers/copilot/index.js';
+import { listClaudeModels } from './providers/anthropic/models.js';
+import { listCodexModels } from './providers/openai/models.js';
 import {
   AGENT_TYPES_WITH_SETTINGS,
   isValidAgentModelSetting,
@@ -28,6 +30,7 @@ import {
   buildSeedSettings,
   type AgentModelSettings,
 } from '../../shared/types/agentModelSettings.js';
+import { isEffortForProvider } from '../../shared/providers/models.js';
 import type { Provider } from '../../shared/providers/types.js';
 import type { ConversationRow } from '../../shared/types/db.js';
 
@@ -127,28 +130,45 @@ export async function ensureUserAgentModelSettings(userId: number): Promise<bool
   }
   if (!chosen) return false;
 
-  // Dynamic-catalog providers (opencode, copilot) have no static default — a
-  // live model id is required to seed, and we never guess one.
-  let firstDynamicModelId: string | null = null;
-  if (chosen === 'opencode') {
+  let firstModelId: string | null = null;
+  let defaultEffort: string | null = null;
+  if (chosen === 'anthropic') {
+    try {
+      const models = await listClaudeModels(userId);
+      firstModelId = models[0]?.id ?? null;
+      defaultEffort = models[0]?.defaultEffort ?? null;
+    } catch {
+      firstModelId = null;
+    }
+  } else if (chosen === 'openai') {
+    try {
+      const models = await listCodexModels(userId);
+      firstModelId = models[0]?.id ?? null;
+      defaultEffort = models[0]?.defaultEffort ?? null;
+    } catch {
+      firstModelId = null;
+    }
+  } else if (chosen === 'opencode') {
     try {
       const models = await listOpenCodeModels(userId);
-      firstDynamicModelId = models[0]?.id ?? null;
+      firstModelId = models[0]?.id ?? null;
     } catch {
-      firstDynamicModelId = null;
+      firstModelId = null;
     }
-    if (!firstDynamicModelId) return false;
   } else if (chosen === 'copilot') {
     try {
       const models = await listCopilotModels(userId);
-      firstDynamicModelId = models[0]?.id ?? null;
+      firstModelId = models[0]?.id ?? null;
     } catch {
-      firstDynamicModelId = null;
+      firstModelId = null;
     }
-    if (!firstDynamicModelId) return false;
+  }
+  if (!firstModelId) return false;
+  if (defaultEffort !== null && !isEffortForProvider(chosen, defaultEffort)) {
+    defaultEffort = null;
   }
 
-  const seed = buildSeedSettings(chosen, firstDynamicModelId);
+  const seed = buildSeedSettings(chosen, firstModelId, defaultEffort);
   if (!seed) return false;
 
   saveAgentModelSettings(userId, seed);

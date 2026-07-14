@@ -145,10 +145,8 @@ export default function NewConversationModalBase<TEntity = unknown>({
       return;
     }
 
-    if (provider === 'opencode' && !model) {
-      setError(
-        'Select an OpenCode model. If the list is empty, connect an OpenCode key in Settings → Providers.',
-      );
+    if (!model) {
+      setError('Select a model. If the list is empty, reconnect the provider in Settings → Providers.');
       return;
     }
 
