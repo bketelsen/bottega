@@ -8,7 +8,7 @@
  * to change agent behavior without touching code.
  */
 
-import { renderPrompt, resolvePromptPath, resolveScriptPath } from '../services/promptRenderer.js';
+import { renderPrompt, resolvePromptPath, resolveScriptCommand } from '../services/promptRenderer.js';
 
 interface FileContext {
   path?: string;
@@ -43,7 +43,7 @@ export async function generatePlanificationMessage(
 ): Promise<string> {
   const promptName = isTechnical ? 'planification' : 'planification-nontechnical';
   const planTemplatePath = resolvePromptPath('plan-template');
-  const completePlanCommand = `tsx ${JSON.stringify(resolveScriptPath('complete-plan.ts'))} ${taskId}`;
+  const completePlanCommand = resolveScriptCommand('complete-plan.ts', taskId);
   return renderPrompt(promptName, { taskDocPath, taskId, planTemplatePath, completePlanCommand });
 }
 

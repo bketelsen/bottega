@@ -80,6 +80,7 @@ import { initializeDatabase, agentRunsDb } from './database/db.js';
 import { getProject } from './services/projectService.js';
 import { transcribeAudio } from './services/transcription.js';
 import { githubRecoveryScheduler } from './services/github/scheduler.js';
+import { validateGitHubAuthConfiguration } from './services/github/appAuth.js';
 import { configureAgentRunnerBroadcastDefaults } from './services/agentRunner.js';
 import {
   drainGitHubWebhooks,
@@ -447,6 +448,7 @@ async function startServer(): Promise<void> {
     // Refuse to start without a real JWT_SECRET — better to crash loudly than
     // sign tokens with a guessable default.
     ensureJwtSecret();
+    validateGitHubAuthConfiguration();
 
     await initializeDatabase();
 

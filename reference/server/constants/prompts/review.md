@@ -168,18 +168,12 @@ Update the task documentation file at `{{taskDocPath}}`:
    - This allows the implementation agent to retry
 
 #### If READY:
-1. **Run the completion command** to signal the workflow is complete:
-```bash
-tsx /home/ubuntu/bottega/reference/scripts/complete-workflow.ts {{taskId}}
-```
+1. **Run the READY command in the mandatory completion invariant** to signal the workflow is complete.
 This stops the automated agent loop and awaits final user review.
 
 #### If BLOCKED:
 1. **Update the "Review Findings" section** explaining what is blocking progress and what user action is needed
-2. **Run the block command** to pause the workflow:
-```bash
-tsx /home/ubuntu/bottega/reference/scripts/block-workflow.ts {{taskId}}
-```
+2. **Run the BLOCKED command in the mandatory completion invariant** to pause the workflow.
 This stops the automated agent loop until the user resumes it after providing the needed input.
 
 ## Important Constraints

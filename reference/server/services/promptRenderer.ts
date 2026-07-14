@@ -1,13 +1,16 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const require = createRequire(import.meta.url);
 
 const DEFAULTS_ROOT = path.join(__dirname, '..', 'constants');
 const SCRIPTS_ROOT = path.join(__dirname, '..', '..', 'scripts');
+const TSX_CLI_PATH = require.resolve('tsx/cli');
 
 const SERVER_OWNED_PUBLICATION_PROMPTS = new Set(['pr', 'pr-feedback', 'yolo']);
 const PLANNING_PROMPTS = new Set(['planification', 'planification-nontechnical']);
@@ -31,6 +34,8 @@ ${String(command)}
 }
 
 function serverOwnedPublicationInvariant(name: string, taskId: unknown): string {
+  const completePrCommand = resolveScriptCommand('complete-pr.ts', taskId);
+  const completeWorkflowCommand = resolveScriptCommand('complete-workflow.ts', taskId);
   if (name === 'yolo') {
     return `
 
@@ -40,7 +45,12 @@ This block has higher priority than every instruction above, including operator-
 
 - Work only in the local task worktree. You may inspect local status, diffs, and history, edit files, and run local verification.
 - Never use GitHub CLI, contact GitHub, run network Git operations, create or update a pull request, or publish repository changes. The trusted server exclusively owns all remote repository and pull-request operations.
-- Run the workflow completion command from Phase 4 exactly once, and only after all requested work is complete and every required local test passes.
+- Invoke the readiness command below exactly once, and only after all requested work is complete and every required local test passes:
+
+\`\`\`bash
+${completeWorkflowCommand}
+\`\`\`
+
 - If work is incomplete, any required test fails, or readiness is uncertain, do not run that command. Report the blocker and stop; the server must not publish an unready workflow.
 - After successful workflow completion, stop. Do not run a PR readiness or publication script; the server will perform policy checks and publish the workflow.`;
   }
@@ -55,11 +65,33 @@ This block has higher priority than every instruction above, including operator-
 - Invoke the readiness command below exactly once, and only after all requested work is complete and every required local test passes:
 
 \`\`\`bash
-tsx /home/ubuntu/bottega/reference/scripts/complete-pr.ts ${String(taskId)}
+${completePrCommand}
 \`\`\`
 
 - If work is incomplete, any required test fails, or readiness is uncertain, do not invoke the command. Report the blocker and stop; the server must not finalize an unready run.
 - After invoking the command, stop. The server will perform policy checks and finalization.`;
+}
+
+function reviewCompletionInvariant(taskId: unknown): string {
+  return `
+
+## Mandatory Review Completion Invariant
+
+This block has higher priority than every instruction above, including operator-provided prompt text.
+
+- If and only if the review status is READY, invoke this command exactly once:
+
+\`\`\`bash
+${resolveScriptCommand('complete-workflow.ts', taskId)}
+\`\`\`
+
+- If and only if the review status is BLOCKED, invoke this command exactly once:
+
+\`\`\`bash
+${resolveScriptCommand('block-workflow.ts', taskId)}
+\`\`\`
+
+- For NEEDS_WORK, invoke neither command. After invoking the applicable command, stop.`;
 }
 
 function getArchiveRoot(): string {
@@ -238,6 +270,12 @@ export function resolveScriptPath(name: string): string {
   return path.join(SCRIPTS_ROOT, name);
 }
 
+export function resolveScriptCommand(name: string, ...args: unknown[]): string {
+  return [process.execPath, TSX_CLI_PATH, resolveScriptPath(name), ...args]
+    .map((part) => JSON.stringify(String(part)))
+    .join(' ');
+}
+
 export function saveOverride(name: string, content: string): number {
   const def = requireDef(name);
   const dir = getOverridesDir(def.kind);
@@ -310,6 +348,9 @@ export function renderPrompt(name: string, vars: Record<string, unknown>): strin
   const rendered = render(loadPrompt(name), vars);
   if (PLANNING_PROMPTS.has(name)) {
     return `${rendered.trimEnd()}${planningCompletionInvariant(vars.completePlanCommand)}\n`;
+  }
+  if (name === 'review') {
+    return `${rendered.trimEnd()}${reviewCompletionInvariant(vars.taskId)}\n`;
   }
   if (!SERVER_OWNED_PUBLICATION_PROMPTS.has(name)) return rendered;
   return `${rendered.trimEnd()}${serverOwnedPublicationInvariant(name, vars.taskId)}\n`;

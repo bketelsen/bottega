@@ -184,15 +184,23 @@ export function CodexAuthPanel() {
         </div>
 
         {status?.authenticated && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleClear}
-            disabled={submitting}
-            data-testid="codex-auth-clear"
-          >
-            <Trash2 className="w-3 h-3 mr-1" /> Disconnect
-          </Button>
+          <>
+            {status.tokenExpiresAt && (
+              <p className={`text-xs ${status.tokenExpired ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
+                Embedded token expiry: {new Date(status.tokenExpiresAt).toLocaleString()}
+                {status.tokenExpired ? ' (expired)' : ''}; refresh credential {status.refreshable ? 'present' : 'not present'}.
+              </p>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleClear}
+              disabled={submitting}
+              data-testid="codex-auth-clear"
+            >
+              <Trash2 className="w-3 h-3 mr-1" /> Disconnect
+            </Button>
+          </>
         )}
       </div>
 

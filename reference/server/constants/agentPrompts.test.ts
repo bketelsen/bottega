@@ -9,7 +9,15 @@ import {
   generatePrAgentCommentMessage,
   generatePrAgentReviewMessage,
 } from './agentPrompts.js';
-import { saveOverride, deleteOverride } from '../services/promptRenderer.js';
+import {
+  saveOverride,
+  deleteOverride,
+  resolveScriptCommand,
+} from '../services/promptRenderer.js';
+
+function expectCommandOnce(message: string, command: string): void {
+  expect(message.split(command)).toHaveLength(2);
+}
 
 function expectCredentialFreeReadiness(message: string, taskId: number): void {
   expect(message).not.toMatch(/\bgh\s/);
@@ -21,7 +29,7 @@ function expectCredentialFreeReadiness(message: string, taskId: number): void {
   expect(message).toContain('every required local test passes');
   expect(message).toContain('If work is incomplete');
   expect(message).toContain('any required test fails');
-  expect(message.match(new RegExp(`complete-pr\\.ts ${taskId}`, 'g'))).toHaveLength(1);
+  expectCommandOnce(message, resolveScriptCommand('complete-pr.ts', taskId));
 }
 
 describe('generateYoloMessage', () => {
@@ -56,8 +64,8 @@ describe('generateYoloMessage', () => {
     const workflowIdx = msg.indexOf('complete-workflow.ts');
     const invariantIdx = msg.indexOf('Mandatory Server-Owned Publication Invariant');
     expect(workflowIdx).toBeGreaterThan(-1);
-    expect(invariantIdx).toBeGreaterThan(workflowIdx);
-    expect(msg.match(/complete-workflow\.ts 42/g)).toHaveLength(1);
+    expect(workflowIdx).toBeGreaterThan(invariantIdx);
+    expectCommandOnce(msg, resolveScriptCommand('complete-workflow.ts', taskId));
     expect(msg).not.toContain('complete-pr.ts');
   });
 
@@ -98,7 +106,7 @@ describe('generatePrAgentMessage', () => {
         msg.indexOf('Mandatory Server-Owned Publication Invariant'),
       );
       expect(msg).toContain('higher priority than every instruction above');
-      expect(msg.match(/complete-pr\.ts 1/g)).toHaveLength(1);
+      expectCommandOnce(msg, resolveScriptCommand('complete-pr.ts', 1));
     } finally {
       deleteOverride('pr');
       fs.rmSync(archiveRoot, { recursive: true, force: true });
@@ -133,7 +141,7 @@ describe('generatePlanificationMessage', () => {
       expect(msg).toContain(String(taskId));
       expect(msg).not.toContain('{{');
       expect(msg).not.toContain('/home/ubuntu/bottega');
-      expect(msg).toMatch(/tsx "[^"]+\/scripts\/complete-plan\.ts" 42/);
+      expect(msg).toContain(resolveScriptCommand('complete-plan.ts', taskId));
       expect(msg).toContain('Mandatory Planning Completion Invariant');
     }
   });
@@ -148,7 +156,7 @@ describe('generatePlanificationMessage', () => {
         msg.indexOf('Mandatory Planning Completion Invariant'),
       );
       expect(msg).toContain('higher priority than every instruction above');
-      expect(msg).toMatch(/tsx "[^"]+\/scripts\/complete-plan\.ts" 42/);
+      expectCommandOnce(msg, resolveScriptCommand('complete-plan.ts', taskId));
     } finally {
       deleteOverride('planification');
       fs.rmSync(archiveRoot, { recursive: true, force: true });

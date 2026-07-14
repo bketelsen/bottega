@@ -130,6 +130,26 @@ describe('codexCredentials', () => {
     expect(status.authenticated).toBe(true);
     expect(status.method).toBe('oauth');
     expect(status.tokenFingerprint).toBe('en-xyz');
+    expect(status.refreshable).toBe(false);
+  });
+
+  it('reports embedded OAuth expiry and refreshability without remote validation', async () => {
+    const expiresAtSeconds = Math.floor(Date.now() / 1000) + 3600;
+    const jwt = `header.${Buffer.from(JSON.stringify({ exp: expiresAtSeconds })).toString('base64url')}.signature`;
+    provisionAuth(42, {
+      tokens: {
+        access_token: jwt,
+        refresh_token: 'refresh-secret',
+      },
+    });
+
+    const status = await getCodexAuthStatus(42);
+    expect(status).toMatchObject({
+      authenticated: true,
+      tokenExpiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
+      tokenExpired: false,
+      refreshable: true,
+    });
   });
 
   it('getCodexAuthStatus reports missing when no auth.json exists', async () => {

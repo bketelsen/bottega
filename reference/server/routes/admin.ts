@@ -10,6 +10,7 @@ import type {
   GetProjectMembersResponse,
   GitHubAppHealthResponse,
   GitHubAppHealthErrorCode,
+  GitHubProjectReadiness,
   ListAdminProjectsResponse,
   ListAdminUsersResponse,
   RemoveProjectMemberResponse,
@@ -44,11 +45,30 @@ const GITHUB_APP_ERROR_CODES = new Set<GitHubAppHealthErrorCode>([
   'GITHUB_APP_TOKEN_FAILED',
 ]);
 
+function getGitHubProjectReadiness(): GitHubProjectReadiness {
+  const enabled = projectsDb.getAllAdmin().filter((project) => project.github_automation_enabled === 1);
+  const missingIdentity = enabled.flatMap((project) => {
+    const missing: Array<'repository' | 'repository_id' | 'installation_id'> = [];
+    if (!project.github_repo) missing.push('repository');
+    if (project.github_repository_id == null) missing.push('repository_id');
+    if (project.github_installation_id == null) missing.push('installation_id');
+    return missing.length > 0 ? [{ id: project.id, name: project.name, missing }] : [];
+  });
+  return {
+    automationEnabled: enabled.length,
+    ready: enabled.length - missingIdentity.length,
+    missingIdentity,
+  };
+}
+
 router.get(
   '/github-app/health',
   async (_req: Request, res: Response<GitHubAppHealthResponse | ApiError>) => {
     try {
-      res.json(await getGitHubAppHealth());
+      res.json({
+        ...await getGitHubAppHealth(),
+        projects: getGitHubProjectReadiness(),
+      });
     } catch (error) {
       console.error('Error checking GitHub App health:', error);
       const candidate = (error as { code?: unknown }).code;
@@ -71,6 +91,7 @@ router.get(
         lastTokenMintSuccessAt: null,
         errorCode,
         error: error instanceof Error ? error.message : 'GitHub App health check failed',
+        projects: getGitHubProjectReadiness(),
       });
     }
   },

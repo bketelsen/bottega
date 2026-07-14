@@ -17,7 +17,8 @@ import {
   getPromptsDir,
   getTemplatesDir,
   renderPrompt,
-  resolvePromptPath
+  resolvePromptPath,
+  resolveScriptCommand,
 } from './promptRenderer.js';
 
 describe('promptRenderer', () => {
@@ -194,7 +195,7 @@ describe('promptRenderer', () => {
         prContextLine: '- No PR exists yet',
       });
       expect(out).toContain('Mandatory Server-Owned Publication Invariant');
-      expect(out).toContain('complete-pr.ts 99');
+      expect(out).toContain(resolveScriptCommand('complete-pr.ts', 99));
       expect(out).not.toMatch(/\bgh\s/);
       expect(out).not.toMatch(/git\s+(?:push|fetch)\b/);
     });
@@ -210,7 +211,14 @@ describe('promptRenderer', () => {
       expect(out.indexOf('UNSAFE CUSTOM TEXT')).toBeLessThan(
         out.indexOf('Mandatory Server-Owned Publication Invariant'),
       );
-      expect(out.match(/complete-pr\.ts 99/g)).toHaveLength(1);
+      expect(out.split(resolveScriptCommand('complete-pr.ts', 99))).toHaveLength(2);
+    });
+
+    it('appends runtime-owned READY and BLOCKED commands to the review prompt', () => {
+      const out = renderPrompt('review', { taskDocPath: '/x/y.md', taskId: 99 });
+      expect(out).toContain('Mandatory Review Completion Invariant');
+      expect(out.split(resolveScriptCommand('complete-workflow.ts', 99))).toHaveLength(2);
+      expect(out.split(resolveScriptCommand('block-workflow.ts', 99))).toHaveLength(2);
     });
   });
 

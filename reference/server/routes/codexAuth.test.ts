@@ -70,6 +70,9 @@ describe('Codex auth routes', () => {
         method: 'oauth',
         tokenFingerprint: 'abcdef',
         email: 'user@example.com',
+        tokenExpiresAt: '2026-07-13T13:00:00.000Z',
+        tokenExpired: false,
+        refreshable: true,
       });
       vi.mocked(getActiveCodexAuthLogin).mockReturnValue(null);
       const res = await request(app).get('/api/codex-auth/status');
@@ -80,6 +83,9 @@ describe('Codex auth routes', () => {
         method: 'oauth',
         email: 'user@example.com',
         tokenFingerprint: 'abcdef',
+        tokenExpiresAt: '2026-07-13T13:00:00.000Z',
+        tokenExpired: false,
+        refreshable: true,
         reason: null,
         login: null,
       });

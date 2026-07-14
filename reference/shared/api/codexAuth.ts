@@ -6,6 +6,11 @@ export interface CodexAuthStatusResponse {
   method: 'oauth' | 'api_key' | null;
   email: string | null;
   tokenFingerprint: string | null;
+  /** Unverified expiry embedded in a local OAuth JWT, when one is parseable. */
+  tokenExpiresAt: string | null;
+  tokenExpired: boolean | null;
+  /** Whether auth.json contains a refresh token; this does not prove upstream validity. */
+  refreshable: boolean;
   reason: string | null;
   /** Active device-auth login (when one is in flight). */
   login: {

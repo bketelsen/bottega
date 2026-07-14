@@ -16,6 +16,10 @@ import type { UserFormSubmitData, UserFormSubmitResult } from '../components/Adm
 
 type AdminTab = 'users' | 'projects' | 'github';
 
+function formatHealthTime(value: number | null): string {
+  return value === null ? 'never' : new Date(value).toLocaleString();
+}
+
 function AdminPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -322,9 +326,35 @@ function AdminPage() {
                     <span className="text-sm capitalize">{githubHealth.status}</span>
                   </div>
                   {githubHealth.appSlug && <p className="text-sm">App: {githubHealth.appSlug}</p>}
+                  {githubHealth.botLogin && <p className="text-sm">Bot identity: {githubHealth.botLogin}</p>}
+                  {githubHealth.appId && <p className="text-sm">App ID: {githubHealth.appId}</p>}
                   <p className="text-sm text-muted-foreground">
                     Webhook: {githubHealth.webhookConfigured ? 'configured' : 'not configured'}
                   </p>
+                  {githubHealth.webhookUrl && (
+                    <p className="text-sm text-muted-foreground break-all">Webhook URL: {githubHealth.webhookUrl}</p>
+                  )}
+                  <p className="text-sm text-muted-foreground">
+                    Last metadata check: {formatHealthTime(githubHealth.lastMetadataSuccessAt)}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Last token mint: {formatHealthTime(githubHealth.lastTokenMintSuccessAt)}
+                  </p>
+                  <div className="pt-2 border-t border-border text-sm">
+                    <p>
+                      Automation projects: {githubHealth.projects.ready}/{githubHealth.projects.automationEnabled} ready
+                    </p>
+                    {githubHealth.projects.missingIdentity.map((project) => (
+                      <p key={project.id} className="text-amber-600 dark:text-amber-400">
+                        {project.name}: missing {project.missing.join(', ')}
+                      </p>
+                    ))}
+                  </div>
+                  {githubHealth.mode === 'host' && (
+                    <p className="text-sm text-amber-600 dark:text-amber-400">
+                      Host mode is deprecated. Configure GitHub App mode for repository-scoped automation.
+                    </p>
+                  )}
                   {githubHealth.error && (
                     <p className="text-sm text-red-500">
                       {githubHealth.errorCode ? `${githubHealth.errorCode}: ` : ''}{githubHealth.error}
