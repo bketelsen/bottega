@@ -18,8 +18,16 @@ vi.mock('../contexts/ConnectedProvidersContext', () => ({
 // Stub the OpenCode catalog fetch so a default-to-OpenCode account can resolve
 // a model without hitting the network.
 const mockModels = vi.fn();
+const mockClaudeModels = vi.fn();
+const mockCodexModels = vi.fn();
+const mockCopilotModels = vi.fn();
 vi.mock('../utils/api', () => ({
-  api: { openCodeAuth: { models: () => mockModels() } },
+  api: {
+    claudeAuth: { models: () => mockClaudeModels() },
+    codexAuth: { models: () => mockCodexModels() },
+    openCodeAuth: { models: () => mockModels() },
+    copilotAuth: { models: () => mockCopilotModels() },
+  },
 }));
 
 function catalog(...ids: string[]) {
@@ -45,6 +53,12 @@ describe('useProviderModelSelection', () => {
   beforeEach(() => {
     mockConnected = [];
     mockModels.mockReset();
+    mockClaudeModels.mockReset();
+    mockCodexModels.mockReset();
+    mockCopilotModels.mockReset();
+    mockClaudeModels.mockResolvedValue(catalog('claude-sonnet-current'));
+    mockCodexModels.mockResolvedValue(catalog('gpt-current-codex'));
+    mockCopilotModels.mockResolvedValue(catalog('copilot/gpt-current'));
   });
 
   it('defaults to the only connected provider (opencode) and loads its catalog', async () => {
@@ -62,13 +76,13 @@ describe('useProviderModelSelection', () => {
     await waitFor(() => expect(result.current.model).toBe('opencode/big-pickle'));
   });
 
-  it('defaults to anthropic + sonnet when Anthropic is connected', () => {
+  it('defaults to Anthropic and loads its authenticated catalog', async () => {
     mockConnected = ['anthropic', 'opencode'];
 
     const { result } = renderHook(() => useProviderModelSelection());
 
     expect(result.current.provider).toBe('anthropic');
-    expect(result.current.model).toBe('sonnet');
+    await waitFor(() => expect(result.current.model).toBe('claude-sonnet-current'));
     expect(result.current.availableProviders).toEqual(['anthropic', 'opencode']);
   });
 
@@ -92,6 +106,23 @@ describe('useProviderModelSelection', () => {
 
     // The connected-set effect must not override the user's explicit choice.
     await waitFor(() => expect(result.current.provider).toBe('openai'));
+  });
+
+  it('does not apply a stale catalog result after switching providers', async () => {
+    mockConnected = ['anthropic', 'openai'];
+    let resolveClaude: () => void = () => {};
+    mockClaudeModels.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveClaude = () => resolve(catalog('claude-late'));
+      }),
+    );
+
+    const { result } = renderHook(() => useProviderModelSelection());
+    act(() => result.current.handleProviderChange('openai'));
+    await waitFor(() => expect(result.current.model).toBe('gpt-current-codex'));
+
+    await act(async () => resolveClaude());
+    expect(result.current.model).toBe('gpt-current-codex');
   });
 
   it('keeps a stable reset identity across an OpenCode catalog load', async () => {

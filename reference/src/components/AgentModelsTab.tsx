@@ -9,7 +9,6 @@ import { api } from '../utils/api';
 import AgentModelSettingRow from './AgentModelSettingRow';
 import {
   AGENT_TYPES_WITH_SETTINGS,
-  MODELS_FOR_UI,
   EFFORTS_FOR_UI,
   type AgentModelSetting,
   type AgentModelSettings,
@@ -18,6 +17,8 @@ import type { AgentType } from '../../shared/types/db';
 import type { Provider } from '../../shared/providers/types';
 import type { OpenCodeModelEntry } from '../../shared/api/openCodeAuth';
 import type { CopilotModelEntry } from '../../shared/api/copilotAuth';
+import type { ClaudeModelEntry } from '../../shared/api/auth';
+import type { CodexModelEntry } from '../../shared/api/codexAuth';
 
 const AGENT_LABELS: Record<AgentType, string> = {
   planification: 'Planning',
@@ -36,6 +37,10 @@ function AgentModelsTab() {
   const [isLoadingOpenCodeModels, setLoadingOpenCodeModels] = useState(false);
   const [copilotModels, setCopilotModels] = useState<CopilotModelEntry[] | null>(null);
   const [isLoadingCopilotModels, setLoadingCopilotModels] = useState(false);
+  const [claudeModels, setClaudeModels] = useState<ClaudeModelEntry[] | null>(null);
+  const [isLoadingClaudeModels, setLoadingClaudeModels] = useState(false);
+  const [codexModels, setCodexModels] = useState<CodexModelEntry[] | null>(null);
+  const [isLoadingCodexModels, setLoadingCodexModels] = useState(false);
   const [isLoading, setLoading] = useState(true);
   const [isSaving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,6 +80,30 @@ function AgentModelsTab() {
     }
   }, []);
 
+  const loadClaudeModels = useCallback(async () => {
+    setLoadingClaudeModels(true);
+    try {
+      const res = await api.claudeAuth.models();
+      setClaudeModels(res.ok ? (await res.json()).models : []);
+    } catch {
+      setClaudeModels([]);
+    } finally {
+      setLoadingClaudeModels(false);
+    }
+  }, []);
+
+  const loadCodexModels = useCallback(async () => {
+    setLoadingCodexModels(true);
+    try {
+      const res = await api.codexAuth.models();
+      setCodexModels(res.ok ? (await res.json()).models : []);
+    } catch {
+      setCodexModels([]);
+    } finally {
+      setLoadingCodexModels(false);
+    }
+  }, []);
+
   useEffect(() => {
     void (async () => {
       setLoading(true);
@@ -86,6 +115,8 @@ function AgentModelsTab() {
         if (providersRes.ok) {
           const body = await providersRes.json();
           setConnected(body.connected);
+          if (body.connected.includes('anthropic')) void loadClaudeModels();
+          if (body.connected.includes('openai')) void loadCodexModels();
           if (body.connected.includes('opencode')) void loadOpenCodeModels();
           if (body.connected.includes('copilot')) void loadCopilotModels();
         }
@@ -105,7 +136,7 @@ function AgentModelsTab() {
         setLoading(false);
       }
     })();
-  }, [loadOpenCodeModels, loadCopilotModels]);
+  }, [loadClaudeModels, loadCodexModels, loadOpenCodeModels, loadCopilotModels]);
 
   const updateAgentSetting = useCallback(
     async (agent: AgentType, patch: Partial<AgentModelSetting>) => {
@@ -117,12 +148,14 @@ function AgentModelsTab() {
       let merged: AgentModelSetting;
       if (patch.provider && patch.provider !== current.provider) {
         const p = patch.provider;
-        const nextModel =
-          p === 'opencode'
-            ? (openCodeModels?.[0]?.id ?? null)
-            : p === 'copilot'
-              ? (copilotModels?.[0]?.id ?? null)
-              : MODELS_FOR_UI[p][0];
+        const firstLiveModel = p === 'anthropic'
+          ? claudeModels?.[0]
+          : p === 'openai'
+            ? codexModels?.[0]
+            : p === 'opencode'
+              ? openCodeModels?.[0]
+              : copilotModels?.[0];
+        const nextModel = firstLiveModel?.id ?? null;
         if (nextModel === null) {
           setError(
             `The ${p} catalog is still loading or that provider isn't connected. ` +
@@ -130,7 +163,14 @@ function AgentModelsTab() {
           );
           return;
         }
-        merged = { provider: p, model: nextModel, effort: EFFORTS_FOR_UI[p][0] ?? null };
+        const modelWithEffort = firstLiveModel as
+          | { defaultEffort?: string | null; supportedEfforts?: string[] }
+          | undefined;
+        const effort = modelWithEffort?.defaultEffort
+          ?? modelWithEffort?.supportedEfforts?.[0]
+          ?? EFFORTS_FOR_UI[p][0]
+          ?? null;
+        merged = { provider: p, model: nextModel, effort };
       } else {
         merged = { ...current, ...patch };
       }
@@ -158,7 +198,7 @@ function AgentModelsTab() {
         setSaving(false);
       }
     },
-    [settings, openCodeModels, copilotModels],
+    [settings, claudeModels, codexModels, openCodeModels, copilotModels],
   );
 
   if (isLoading) {
@@ -215,6 +255,10 @@ function AgentModelsTab() {
             isLoadingOpenCodeModels={isLoadingOpenCodeModels}
             copilotModels={copilotModels}
             isLoadingCopilotModels={isLoadingCopilotModels}
+            claudeModels={claudeModels}
+            isLoadingClaudeModels={isLoadingClaudeModels}
+            codexModels={codexModels}
+            isLoadingCodexModels={isLoadingCodexModels}
             disabled={isSaving}
             onChange={updateAgentSetting}
           />

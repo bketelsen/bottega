@@ -32,6 +32,10 @@ vi.mock('../services/agentModelSettings.js', () => ({
   seedAgentSettingsAfterConnect: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('../services/providers/anthropic/models.js', () => ({
+  listClaudeModels: vi.fn(),
+}));
+
 import claudeAuthRoutes from './claudeAuth.js';
 import {
   ClaudeCredentialsError,
@@ -39,6 +43,7 @@ import {
   getClaudeAuthStatus
 } from '../services/claudeCredentials.js';
 import { seedAgentSettingsAfterConnect } from '../services/agentModelSettings.js';
+import { listClaudeModels } from '../services/providers/anthropic/models.js';
 import {
   cancelClaudeAuthLogin,
   ClaudeAuthLoginError,
@@ -178,6 +183,29 @@ describe('Claude auth routes', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ cancelled: true });
     expect(cancelClaudeAuthLogin).toHaveBeenCalledWith(42, 'user-cancelled');
+  });
+
+  it('returns the authenticated user’s live Claude models', async () => {
+    vi.mocked(getClaudeAuthStatus).mockResolvedValue({
+      authenticated: true,
+      status: 'authenticated',
+      tokenPath: '/x/token',
+    });
+    vi.mocked(listClaudeModels).mockResolvedValue([
+      {
+        id: 'claude-sonnet-current',
+        name: 'Claude Sonnet',
+        description: 'Balanced model',
+        supportedEfforts: ['low', 'high'],
+        defaultEffort: 'high',
+      },
+    ]);
+
+    const response = await request(app).get('/api/claude-auth/models');
+
+    expect(response.status).toBe(200);
+    expect(response.body.models[0].id).toBe('claude-sonnet-current');
+    expect(listClaudeModels).toHaveBeenCalledWith(42);
   });
 
   describe('DELETE /', () => {

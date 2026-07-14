@@ -11,6 +11,20 @@ vi.mock('lucide-react', () => ({
   MessageCircleQuestion: () => <span data-testid="icon-question" />,
 }));
 
+vi.mock('../utils/api', () => ({
+  api: {
+    claudeAuth: {
+      models: vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ models: [{ id: 'claude-sonnet-current', name: 'Claude Sonnet' }] }),
+      }),
+    },
+    codexAuth: { models: vi.fn() },
+    openCodeAuth: { models: vi.fn() },
+    copilotAuth: { models: vi.fn() },
+  },
+}));
+
 describe('AskQuestionModal', () => {
   const defaultProps = {
     isOpen: true,
@@ -37,9 +51,12 @@ describe('AskQuestionModal', () => {
     expect(screen.getByLabelText('Question')).toBeInTheDocument();
   });
 
-  it('disables submit when either field is empty', () => {
+  it('disables submit when either field is empty', async () => {
     render(<AskQuestionModal {...defaultProps} />);
     const submit = screen.getByRole('button', { name: 'Ask Question' });
+    await waitFor(() => expect(screen.getByTestId('ask-question-model-select')).toHaveValue(
+      'claude-sonnet-current',
+    ));
     expect(submit).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText('Task Title'), { target: { value: 'T' } });
@@ -53,6 +70,10 @@ describe('AskQuestionModal', () => {
     const onSubmit = vi.fn().mockResolvedValue({ success: true });
     render(<AskQuestionModal {...defaultProps} onSubmit={onSubmit} />);
 
+    await waitFor(() => expect(screen.getByTestId('ask-question-model-select')).toHaveValue(
+      'claude-sonnet-current',
+    ));
+
     fireEvent.change(screen.getByLabelText('Task Title'), { target: { value: '  Architecture  ' } });
     fireEvent.change(screen.getByLabelText('Question'), { target: { value: '  What rails version?  ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Ask Question' }));
@@ -61,9 +82,9 @@ describe('AskQuestionModal', () => {
       expect(onSubmit).toHaveBeenCalledWith({
         title: 'Architecture',
         question: 'What rails version?',
-        // Picker defaults to Claude + the first Claude model (Sonnet).
+        // Picker defaults to Claude + the first authenticated catalog entry.
         provider: 'anthropic',
-        model: 'sonnet',
+        model: 'claude-sonnet-current',
       });
     });
   });
@@ -71,6 +92,10 @@ describe('AskQuestionModal', () => {
   it('shows error when onSubmit returns failure', async () => {
     const onSubmit = vi.fn().mockResolvedValue({ success: false, error: 'Network error' });
     render(<AskQuestionModal {...defaultProps} onSubmit={onSubmit} />);
+
+    await waitFor(() => expect(screen.getByTestId('ask-question-model-select')).toHaveValue(
+      'claude-sonnet-current',
+    ));
 
     fireEvent.change(screen.getByLabelText('Task Title'), { target: { value: 'T' } });
     fireEvent.change(screen.getByLabelText('Question'), { target: { value: 'Q' } });

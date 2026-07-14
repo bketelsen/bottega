@@ -21,6 +21,18 @@ vi.mock('./providers/opencode/index.js', () => ({
   listOpenCodeModels: vi.fn(),
 }));
 
+vi.mock('./providers/anthropic/models.js', () => ({
+  listClaudeModels: vi.fn(),
+}));
+
+vi.mock('./providers/openai/models.js', () => ({
+  listCodexModels: vi.fn(),
+}));
+
+vi.mock('./providers/copilot/index.js', () => ({
+  listCopilotModels: vi.fn(),
+}));
+
 import {
   loadAgentModelSettings,
   ensureUserAgentModelSettings,
@@ -30,6 +42,8 @@ import {
 import { userAgentModelSettingsDb, userDb, agentRunsDb } from '../database/db.js';
 import { getCredentialStore } from './credentials/registry.js';
 import { listOpenCodeModels } from './providers/opencode/index.js';
+import { listClaudeModels } from './providers/anthropic/models.js';
+import { listCodexModels } from './providers/openai/models.js';
 import {
   AGENT_TYPES_WITH_SETTINGS,
   type AgentModelSetting,
@@ -60,6 +74,24 @@ function connectProviders(...connected: Provider[]): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(listClaudeModels).mockResolvedValue([
+    {
+      id: 'claude-sonnet-current',
+      name: 'Claude Sonnet',
+      description: 'Balanced model',
+      supportedEfforts: ['low', 'high'],
+      defaultEffort: 'high',
+    },
+  ]);
+  vi.mocked(listCodexModels).mockResolvedValue([
+    {
+      id: 'gpt-current-codex',
+      name: 'GPT Codex',
+      description: 'Coding model',
+      supportedEfforts: ['medium', 'high'],
+      defaultEffort: 'medium',
+    },
+  ]);
 });
 
 describe('loadAgentModelSettings (per-user)', () => {
@@ -80,16 +112,16 @@ describe('loadAgentModelSettings (per-user)', () => {
     expect(() => loadAgentModelSettings(USER)).toThrow(MissingUserAgentSettingsError);
   });
 
-  it('throws when an entry has an invalid model for its provider', () => {
+  it('throws when an entry has an empty model', () => {
     vi.mocked(userAgentModelSettingsDb.getRaw).mockReturnValue(
-      fullBlob({ provider: 'anthropic', model: 'haiku', effort: 'high' }),
+      fullBlob({ provider: 'anthropic', model: '', effort: 'high' }),
     );
     expect(() => loadAgentModelSettings(USER)).toThrow(MissingUserAgentSettingsError);
   });
 
-  it('throws on a cross-provider entry (openai + opus)', () => {
+  it('throws on a prefixed model from another provider', () => {
     vi.mocked(userAgentModelSettingsDb.getRaw).mockReturnValue(
-      fullBlob({ provider: 'openai', model: 'opus', effort: 'high' }),
+      fullBlob({ provider: 'openai', model: 'opencode/kimi', effort: 'high' }),
     );
     expect(() => loadAgentModelSettings(USER)).toThrow(MissingUserAgentSettingsError);
   });
@@ -133,22 +165,22 @@ describe('ensureUserAgentModelSettings', () => {
     expect(userAgentModelSettingsDb.set).not.toHaveBeenCalled();
   });
 
-  it('seeds anthropic→sonnet and completes onboarding', async () => {
+  it('seeds Anthropic from its first live model and completes onboarding', async () => {
     vi.mocked(userAgentModelSettingsDb.getRaw).mockReturnValue(null);
     connectProviders('anthropic');
     const result = await ensureUserAgentModelSettings(USER);
     expect(result).toBe(true);
     const saved = JSON.parse(vi.mocked(userAgentModelSettingsDb.set).mock.calls[0]![1]);
-    expect(saved.planification).toEqual({ provider: 'anthropic', model: 'sonnet', effort: 'high' });
+    expect(saved.planification).toEqual({ provider: 'anthropic', model: 'claude-sonnet-current', effort: 'high' });
     expect(userDb.completeOnboarding).toHaveBeenCalledWith(USER);
   });
 
-  it('seeds openai→gpt-5.5 when only OpenAI is connected', async () => {
+  it('seeds OpenAI from its first live model when only OpenAI is connected', async () => {
     vi.mocked(userAgentModelSettingsDb.getRaw).mockReturnValue(null);
     connectProviders('openai');
     await ensureUserAgentModelSettings(USER);
     const saved = JSON.parse(vi.mocked(userAgentModelSettingsDb.set).mock.calls[0]![1]);
-    expect(saved.review).toEqual({ provider: 'openai', model: 'gpt-5.5', effort: 'high' });
+    expect(saved.review).toEqual({ provider: 'openai', model: 'gpt-current-codex', effort: 'medium' });
   });
 
   it('prefers anthropic over opencode when both are connected', async () => {

@@ -32,6 +32,10 @@ vi.mock('../services/agentModelSettings.js', () => ({
   seedAgentSettingsAfterConnect: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('../services/providers/openai/models.js', () => ({
+  listCodexModels: vi.fn(),
+}));
+
 import codexAuthRoutes from './codexAuth.js';
 import {
   CodexCredentialsError,
@@ -46,6 +50,7 @@ import {
   startCodexAuthLogin,
 } from '../services/codexAuthFlow.js';
 import { seedAgentSettingsAfterConnect } from '../services/agentModelSettings.js';
+import { listCodexModels } from '../services/providers/openai/models.js';
 
 describe('Codex auth routes', () => {
   let app: import('express').Application;
@@ -249,5 +254,29 @@ describe('Codex auth routes', () => {
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ cleared: false });
     });
+  });
+
+  it('returns the authenticated user’s live Codex models', async () => {
+    vi.mocked(getCodexAuthStatus).mockResolvedValue({
+      authenticated: true,
+      status: 'authenticated',
+      authPath: '/x/auth.json',
+      method: 'oauth',
+    });
+    vi.mocked(listCodexModels).mockResolvedValue([
+      {
+        id: 'gpt-current-codex',
+        name: 'GPT Codex',
+        description: 'Coding model',
+        supportedEfforts: ['medium', 'high'],
+        defaultEffort: 'medium',
+      },
+    ]);
+
+    const res = await request(app).get('/api/codex-auth/models');
+
+    expect(res.status).toBe(200);
+    expect(res.body.models[0].id).toBe('gpt-current-codex');
+    expect(listCodexModels).toHaveBeenCalledWith(42);
   });
 });

@@ -97,11 +97,15 @@ describe('/api/user-agent-model-settings', () => {
     expect(saveAgentModelSettings).not.toHaveBeenCalled();
   });
 
-  it('PUT rejects a cross-provider model (anthropic + gpt-5.5) (400)', async () => {
-    const settings = fullSettings({ provider: 'anthropic', model: 'gpt-5.5', effort: 'high' });
+  it('PUT accepts an opaque live model id without freezing the provider catalog', async () => {
+    const settings = fullSettings({
+      provider: 'anthropic',
+      model: 'claude-future-model',
+      effort: 'high',
+    });
     const res = await request(app).put('/api/uams').send(settings);
-    expect(res.status).toBe(400);
-    expect(saveAgentModelSettings).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(saveAgentModelSettings).toHaveBeenCalledWith(5, settings);
   });
 
   it('GET /connected-providers filters by credential status', async () => {

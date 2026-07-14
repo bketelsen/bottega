@@ -23,17 +23,17 @@ import {
 } from './models.js';
 
 describe('shared/providers/models', () => {
-  describe('static lists', () => {
-    it('exposes the canonical Anthropic model list (sonnet, opus — no haiku)', () => {
-      expect(ANTHROPIC_MODELS).toEqual(['sonnet', 'opus']);
+  describe('catalog and effort metadata', () => {
+    it('does not freeze the authenticated Claude model catalog', () => {
+      expect(ANTHROPIC_MODELS).toEqual([]);
     });
 
     it('exposes Anthropic efforts including xhigh and max', () => {
       expect(ANTHROPIC_EFFORTS).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
     });
 
-    it('exposes the canonical OpenAI model list (gpt-5.5, gpt-5.4, gpt-5.4-mini)', () => {
-      expect(OPENAI_MODELS).toEqual(['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']);
+    it('does not freeze the authenticated Codex model catalog', () => {
+      expect(OPENAI_MODELS).toEqual([]);
     });
 
     it('exposes OpenAI efforts mirroring the SDK ModelReasoningEffort union (minimal..xhigh)', () => {
@@ -97,11 +97,11 @@ describe('shared/providers/models', () => {
       expect(isProvider(42)).toBe(false);
     });
 
-    it('isAnthropicModel rejects openai models', () => {
+    it('isAnthropicModel accepts opaque unprefixed live model ids', () => {
       expect(isAnthropicModel('sonnet')).toBe(true);
-      expect(isAnthropicModel('opus')).toBe(true);
-      expect(isAnthropicModel('haiku')).toBe(false);
-      expect(isAnthropicModel('gpt-5.5')).toBe(false);
+      expect(isAnthropicModel('claude-future-model')).toBe(true);
+      expect(isAnthropicModel('')).toBe(false);
+      expect(isAnthropicModel('opencode/model')).toBe(false);
     });
 
     it('isAnthropicEffort rejects bogus efforts', () => {
@@ -111,11 +111,11 @@ describe('shared/providers/models', () => {
       expect(isAnthropicEffort('extreme')).toBe(false);
     });
 
-    it('isOpenAIModel accepts gpt-5.* and rejects anthropic models', () => {
+    it('isOpenAIModel accepts opaque unprefixed live model ids', () => {
       expect(isOpenAIModel('gpt-5.5')).toBe(true);
-      expect(isOpenAIModel('gpt-5.4-mini')).toBe(true);
-      expect(isOpenAIModel('opus')).toBe(false);
-      expect(isOpenAIModel('gpt-4')).toBe(false);
+      expect(isOpenAIModel('future-codex-model')).toBe(true);
+      expect(isOpenAIModel('')).toBe(false);
+      expect(isOpenAIModel('copilot/model')).toBe(false);
     });
 
     it('isOpenAIEffort accepts minimal..xhigh and rejects max', () => {
@@ -149,11 +149,11 @@ describe('shared/providers/models', () => {
       expect(isOpenCodeEffort(null)).toBe(false);
     });
 
-    it('isModelForProvider rejects cross-provider models', () => {
+    it('isModelForProvider validates dynamic model storage shapes', () => {
       expect(isModelForProvider('anthropic', 'opus')).toBe(true);
-      expect(isModelForProvider('anthropic', 'gpt-5.5')).toBe(false);
+      expect(isModelForProvider('anthropic', 'claude-future')).toBe(true);
       expect(isModelForProvider('openai', 'gpt-5.4-mini')).toBe(true);
-      expect(isModelForProvider('openai', 'opus')).toBe(false);
+      expect(isModelForProvider('openai', 'future-codex')).toBe(true);
       expect(isModelForProvider('openai', null)).toBe(false);
       expect(isModelForProvider('opencode', 'opencode/kimi-k2.6')).toBe(true);
       // Any opencode/ prefix passes — Zen owns the catalog.

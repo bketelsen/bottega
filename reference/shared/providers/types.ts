@@ -5,8 +5,8 @@
 // provider-neutral vocabulary. This file is the contract:
 //
 //  - `Provider` names the backend (anthropic | openai).
-//  - `ProviderModel` / `ProviderEffort` are opaque per-provider unions —
-//    callers narrow off `Provider` to know which subset is valid.
+//  - `ProviderModel` is an opaque live-catalog string; `ProviderEffort` is a
+//    per-provider protocol union.
 //  - `UnifiedMessage` is the discriminated union the streaming loop emits.
 //    Both the Anthropic mapper (`server/services/providers/anthropic/mapMessage.ts`)
 //    and the Codex mapper (`server/services/providers/openai/mapEvent.ts`)
@@ -21,18 +21,14 @@
 // terms of these types.
 
 import type {
-  AnthropicModel,
   AnthropicEffort,
-  OpenAIModel,
   OpenAIEffort,
-  OpenCodeModel,
   OpenCodeEffort,
-  CopilotModel,
 } from './models.js';
 
 export type Provider = 'anthropic' | 'openai' | 'opencode' | 'copilot';
 
-export type ProviderModel = AnthropicModel | OpenAIModel | OpenCodeModel | CopilotModel;
+export type ProviderModel = string;
 
 export type ProviderEffort = AnthropicEffort | OpenAIEffort | OpenCodeEffort  ;
 

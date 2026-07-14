@@ -65,36 +65,19 @@ export const DEFAULT_AGENT_MODEL_SETTINGS: AgentModelSettings = {
   yolo: { provider: 'anthropic', model: 'opus', effort: 'high' },
 };
 
-// First-connect seed defaults (chosen with the user): a new user who connects
-// a provider gets all six agents pointed at that provider's default model.
-//   - anthropic → Sonnet
-//   - openai (Codex) → GPT-5.5
-//   - opencode → the FIRST entry of the user's live Zen catalog (resolved at
-//     seed time, NOT hardcoded — the Zen catalog is owned upstream and a
-//     guessed id fails at the SDK boundary).
-const ANTHROPIC_SEED: { model: string; effort: string } = { model: 'sonnet', effort: 'high' };
-const OPENAI_SEED: { model: string; effort: string } = { model: 'gpt-5.5', effort: 'high' };
-
 /**
  * The default (provider, model, effort) for a freshly-connected provider.
- * Returns `null` for the dynamic-catalog providers (`opencode`, `copilot`)
- * when no live model id is available — callers must not seed in that case
- * rather than guess a catalog id. `firstDynamicModelId` is the already-
- * prefixed id (`opencode/<id>` or `copilot/<id>`).
+ * Every provider catalog is live, so callers must supply the first available
+ * model rather than guessing an upstream id.
  */
 export function defaultSettingForProvider(
   provider: Provider,
-  firstDynamicModelId: string | null,
+  firstModelId: string | null,
+  defaultEffort: string | null = null,
 ): AgentModelSetting | null {
-  if (provider === 'anthropic') {
-    return { provider, model: ANTHROPIC_SEED.model, effort: ANTHROPIC_SEED.effort };
-  }
-  if (provider === 'openai') {
-    return { provider, model: OPENAI_SEED.model, effort: OPENAI_SEED.effort };
-  }
-  // opencode / copilot: no static catalog — a live id is required to seed.
-  if (!firstDynamicModelId) return null;
-  return { provider, model: firstDynamicModelId, effort: null };
+  if (!firstModelId) return null;
+  const effort = provider === 'opencode' || provider === 'copilot' ? null : defaultEffort;
+  return { provider, model: firstModelId, effort };
 }
 
 /**
@@ -104,9 +87,10 @@ export function defaultSettingForProvider(
  */
 export function buildSeedSettings(
   provider: Provider,
-  firstDynamicModelId: string | null,
+  firstModelId: string | null,
+  defaultEffort: string | null = null,
 ): AgentModelSettings | null {
-  const setting = defaultSettingForProvider(provider, firstDynamicModelId);
+  const setting = defaultSettingForProvider(provider, firstModelId, defaultEffort);
   if (!setting) return null;
   const result = {} as AgentModelSettings;
   for (const agentType of AGENT_TYPES_WITH_SETTINGS) {
@@ -149,7 +133,7 @@ export function isValidAgentModelSetting(
   return true;
 }
 
-// Per-provider option lists exposed to the UI.
+// Provider catalogs are live, so these model lists are intentionally empty.
 export const MODELS_FOR_UI = {
   anthropic: ANTHROPIC_MODELS,
   openai: OPENAI_MODELS,

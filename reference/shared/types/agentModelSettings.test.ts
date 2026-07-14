@@ -87,19 +87,19 @@ describe('shared/types/agentModelSettings', () => {
   });
 
   describe('defaultSettingForProvider', () => {
-    it('defaults anthropic to Sonnet', () => {
-      expect(defaultSettingForProvider('anthropic', null)).toEqual({
+    it('defaults anthropic from its first live model', () => {
+      expect(defaultSettingForProvider('anthropic', 'claude-sonnet-current', 'high')).toEqual({
         provider: 'anthropic',
-        model: 'sonnet',
+        model: 'claude-sonnet-current',
         effort: 'high',
       });
     });
 
-    it('defaults openai to GPT-5.5', () => {
-      expect(defaultSettingForProvider('openai', null)).toEqual({
+    it('defaults openai from its first live model', () => {
+      expect(defaultSettingForProvider('openai', 'gpt-current-codex', 'medium')).toEqual({
         provider: 'openai',
-        model: 'gpt-5.5',
-        effort: 'high',
+        model: 'gpt-current-codex',
+        effort: 'medium',
       });
     });
 
@@ -118,10 +118,14 @@ describe('shared/types/agentModelSettings', () => {
 
   describe('buildSeedSettings', () => {
     it('fills all six agents with the provider default', () => {
-      const seed = buildSeedSettings('anthropic', null);
+      const seed = buildSeedSettings('anthropic', 'claude-sonnet-current', 'high');
       expect(seed).not.toBeNull();
       for (const agent of AGENT_TYPES_WITH_SETTINGS) {
-        expect(seed![agent]).toEqual({ provider: 'anthropic', model: 'sonnet', effort: 'high' });
+        expect(seed![agent]).toEqual({
+          provider: 'anthropic',
+          model: 'claude-sonnet-current',
+          effort: 'high',
+        });
       }
     });
 

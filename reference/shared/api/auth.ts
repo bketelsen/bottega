@@ -130,6 +130,18 @@ export interface ClearClaudeAuthResponse {
   cleared: boolean;
 }
 
+export interface ClaudeModelEntry {
+  id: string;
+  name: string;
+  description: string;
+  supportedEfforts: string[];
+  defaultEffort: string | null;
+}
+
+export interface ClaudeModelsResponse {
+  models: ClaudeModelEntry[];
+}
+
 // ---- Type-level smoke checks ----------------------------------------------
 //
 // Catch silent drift between this contract and the DB row shape.

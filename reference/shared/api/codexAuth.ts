@@ -45,3 +45,15 @@ export interface PasteCodexAuthResponse {
 export interface ClearCodexAuthResponse {
   cleared: boolean;
 }
+
+export interface CodexModelEntry {
+  id: string;
+  name: string;
+  description: string;
+  supportedEfforts: string[];
+  defaultEffort: string | null;
+}
+
+export interface CodexModelsResponse {
+  models: CodexModelEntry[];
+}
