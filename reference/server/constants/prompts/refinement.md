@@ -86,14 +86,25 @@ Read the security review report from Sub-task B. For each HIGH or MEDIUM finding
 
 If no findings were reported, skip this step.
 
-## Step 3: Summary
+## Step 3: Verify Changes
+
+You run AFTER the review gate passed — any breakage you introduce ships directly in the published PR. Verify before finishing:
+
+1. If Steps 1–2 modified no files, skip verification and go to Step 4.
+2. Run the targeted tests for every file you modified (check CLAUDE.md for the test command).
+3. Run the repository's required verification commands (check CLAUDE.md for a verification gate or full-suite command).
+4. If a failure was introduced by a refinement change, fix it — or **revert that refinement change entirely**. Reverting is always acceptable: the code already passed review without it.
+5. Re-run the failed checks until they pass. Do NOT finish with a failure introduced by your changes.
+
+## Step 4: Summary
 Log a brief summary of all changes made:
 - Number of simplifications applied
 - Number of security fixes applied
+- Refinement changes reverted due to verification failures (if any)
 - Files modified
+- Verification result
 
 ## Important Constraints
 - Do NOT modify task documentation at `{{taskDocPath}}`
 - Do NOT run completion scripts
 - Do NOT ask questions — proceed autonomously
-- Do NOT run tests — the PR agent will handle CI

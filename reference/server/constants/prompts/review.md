@@ -9,8 +9,16 @@ Read the task documentation at `{{taskDocPath}}` to understand:
 - Items marked as completed ([x]) in the To-Do List
 
 #### Early Return — Implementation Still In Progress
-After reading the task doc, check the To-Do List:
-- If **any** To-Do items are still unchecked (`[ ]`), **do NOT proceed to Step 2**. Instead:
+After reading the task doc, check the To-Do List. If **any** To-Do items are still unchecked (`[ ]`), **do NOT proceed to Step 2**. Instead, classify each unchecked item:
+
+- **Agent-executable**: the implementation agent can complete it autonomously in this environment (code, local tests, docs).
+- **Not agent-executable**: it requires a user decision, a user action (e.g., "test in staging"), or an external resource/credential no agent has access to.
+
+**If ANY unchecked item is not agent-executable**, the loop cannot make progress on its own — the status is **BLOCKED**:
+  1. **REPLACE** the entire "Review Findings" section with a `**Status:** BLOCKED` block that lists each non-agent-executable item and states exactly what user input or action would unblock it. Carry forward any unresolved entries from a previous "Issues to Address" list (see Step 6).
+  2. **Run the BLOCKED command in the mandatory completion invariant**, then stop. Do not run tests or further review steps.
+
+**If every unchecked item is agent-executable**, the status is IN_PROGRESS:
   1. **REPLACE** the entire "Review Findings" section with:
 
 ```markdown
@@ -22,14 +30,17 @@ After reading the task doc, check the To-Do List:
 - [ ] Phase N: description
 - [ ] Phase M: description
 
+### Issues to Address (carried forward)
+- [ ] {{ any unresolved issues from the previous Review Findings — verify before dropping }}
+
 Implementation is still in progress. Proceed with the next unchecked item.
 ```
 
-  (List only the unchecked items from the To-Do List.)
+  (List only the unchecked items from the To-Do List. Include the "Issues to Address (carried forward)" subsection only if the previous Review Findings contained issues you have not verified as resolved — never silently drop them.)
 
   2. **Stop here.** Do not run unit tests, Playwright tests, or any further review steps. Return control to the implementation agent.
 
-- If **all** To-Do items are checked (`[x]`), proceed to Step 2 (full review).
+If **all** To-Do items are checked (`[x]`), proceed to Step 2 (full review).
 
 ### 2. Verify Checked Items Against Plan
 
@@ -122,26 +133,27 @@ Based on your findings from steps 2-4, determine if the feature is **READY**, **
 - Implementation gaps or bugs found
 - To-Do items still unchecked
 
-**BLOCKED** - Use this status when the agent cannot complete remaining tasks:
-- All agent-actionable steps (code, automated tests, docs) are complete
-- BUT checklist still has incomplete items that require:
-  - User decisions (e.g., "Should we skip manual testing?")
-  - User actions (e.g., "Test in staging/production environment")
-  - External resources not available to agents (e.g., working test environment)
+**BLOCKED** - Use this status when review itself cannot proceed without the user:
+- A mandatory testing scenario cannot be performed for any reason (missing access, broken test environment, unclear steps, external dependency) — remember: tests are never "skipped", only PASS/FAIL/BLOCKED
+- Or completing the review requires a user decision the agent cannot make
 - The user must intervene to either:
-  - Unblock the remaining items (provide access, fix infrastructure), OR
+  - Unblock the review (provide access, fix infrastructure), OR
   - Explicitly approve skipping those items
 
-**Key question:** "Are there uncompleted checklist items that I physically cannot complete?"
+(Unchecked To-Do items that are not agent-executable are also BLOCKED, but they are detected in the Early Return of Step 1 — they never reach this step.)
+
+**Key question:** "Is there required review work that I physically cannot complete?"
 If YES → BLOCKED (even if the code works perfectly)
 
 ### 6. Update Task Documentation
 Update the task documentation file at `{{taskDocPath}}`:
 
-**The "Review Findings" section must reflect ONLY the current state of testing.**
-- If a "Review Findings" section already exists, REPLACE it entirely with your new findings
-- Do NOT append to previous findings or keep history
-- Each review should completely overwrite the previous review
+**The "Review Findings" section must reflect the current state of testing.**
+- **Read the existing "Review Findings" section BEFORE replacing it.** For every entry in its "Issues to Address" list, verify whether it is actually resolved in the current code:
+  - Resolved → drop it (or list it under a short "Resolved since last review" note)
+  - Not resolved or not verifiable → **carry it forward** into your new "Issues to Address" list
+- Then REPLACE the section with your new findings. Never silently drop an unresolved issue — a dropped issue is lost forever, because each review overwrites the last
+- Do NOT keep full history or append reviews end-to-end; one current section, with unresolved items carried forward
 
 #### If NEEDS_WORK:
 1. **REPLACE** the entire "Review Findings" section with:
@@ -163,9 +175,12 @@ Update the task documentation file at `{{taskDocPath}}`:
 - [List specific issues that need fixing]
 ```
 
-2. **Mark the failed item as unchecked** in the To-Do List:
-   - Change `[x] Phase N: description` back to `[ ] Phase N: description`
-   - This allows the implementation agent to retry
+   (Remember to carry forward unresolved issues from the previous review — see above.)
+
+2. **Ensure EVERY issue maps to an unchecked To-Do item.** The implementation agent's instruction is "implement the unchecked items" — an issue with no unchecked item will not be acted on:
+   - If a checked item failed verification, change `[x] Phase N: description` back to `[ ] Phase N: description`
+   - If a failure has **no** corresponding To-Do item (e.g., a unit test failure, a bug found in manual testing), **ADD a new unchecked item** to the To-Do List describing the concrete fix required, e.g. `- [ ] Fix: <test name> fails because <reason> — <what to change>`
+   - A NEEDS_WORK review that leaves zero unchecked items is invalid — the loop would spin without an actionable delta
 
 #### If READY:
 1. **Run the READY command in the mandatory completion invariant** to signal the workflow is complete.
