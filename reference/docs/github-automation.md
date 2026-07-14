@@ -216,9 +216,16 @@ for tasks without a worktree, while another agent is running, or after the
 shared workflow run limit is reached.
 
 Review threads remain human-controlled: the agent can address feedback, but a
-human or GitHub-side automation must resolve the thread. New commits change the
-evidence hash, so the workflow run cap is the final guard against standing
-feedback causing an unbounded repair loop.
+human or GitHub-side automation must resolve the thread. The evidence hash
+deliberately excludes the head commit, so an agent's own published repair does
+not re-arm standing human feedback: an unresolved thread, an unaddressed
+`CHANGES_REQUESTED` review, or an old trigger mention starts at most one run
+until a human adds new input. Commit-scoped evidence still re-triggers
+naturally — failed checks and statuses on a new commit are new evidence, and
+the stored hash is cleared whenever the pull request is observed with no
+actionable evidence, so a later recurrence (for example the same branch
+re-conflicting after main moves) starts a fresh run. The workflow run cap
+remains the final guard.
 
 PR repair agents do not query GitHub or publish changes. They consume evidence
 already captured in the task document, edit and test the local worktree, and
