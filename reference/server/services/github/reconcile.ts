@@ -24,10 +24,12 @@ import { githubIdentity, isBottegaComment } from './identity.js';
 import { recoverPrAgentRunFinalizations } from './finalize.js';
 import { hasGitHubPrTriggerMention } from './trigger.js';
 
-const PLAN_LABEL = 'Needs Refinement';
-const READY_LABEL = 'Ready';
-const APPROVED_LABEL = 'Refined';
-const REVIEW_LABEL = 'In Review';
+import {
+  PLAN_LABEL,
+  READY_LABEL,
+  APPROVED_LABEL,
+  REVIEW_LABEL,
+} from './workflowLabels.js';
 // Unknown discovery is deliberately one small REST page per repository scan.
 const UNKNOWN_PR_DISCOVERY_BUDGET = 20;
 

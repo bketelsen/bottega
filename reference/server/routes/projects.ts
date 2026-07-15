@@ -38,8 +38,34 @@ import {
   resolveRepositoryInstallation,
   type GitHubRepositoryInstallation,
 } from '../services/github/appAuth.js';
+import { githubClient } from '../services/github/client.js';
+import type { GitHubProject } from '../services/github/capabilities.js';
 
 const router = express.Router();
+
+/**
+ * Best-effort provisioning of the Bottega workflow labels on a project's
+ * linked repository. Runs after automation is enabled so the label-gated
+ * issue-intake flow works without operators creating labels by hand. Never
+ * throws: a provisioning failure is logged but must not fail project
+ * create/update (the labels can also be added later).
+ */
+async function provisionWorkflowLabels(project: GitHubProject): Promise<void> {
+  if (project.github_automation_enabled !== 1 || !project.github_repo) return;
+  try {
+    const { created } = await githubClient.ensureLabels(project);
+    if (created.length > 0) {
+      console.log(
+        `[Projects] Provisioned workflow labels on ${project.github_repo}: ${created.join(', ')}`,
+      );
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[Projects] Failed to provision workflow labels on ${project.github_repo}: ${message}`,
+    );
+  }
+}
 
 class ProjectReadinessError extends Error {
   constructor(message: string, readonly code = 'PROJECT_AUTOMATION_NOT_READY') {
@@ -201,6 +227,7 @@ router.post(
 
       const project = projectsDb.getById(created.id, userId);
       if (!project) throw new Error('Created project could not be reloaded');
+      await provisionWorkflowLabels(project);
       res.status(201).json(project);
     } catch (error) {
       console.error('Error creating project:', error);
@@ -310,6 +337,8 @@ router.put(
       if (!project) {
         return res.status(404).json({ error: 'Project not found' });
       }
+
+      await provisionWorkflowLabels(project);
 
       res.json(verifiedProject ? { ...verifiedProject, ...project } : project);
     } catch (error) {

@@ -30,6 +30,12 @@ vi.mock('../services/github/appAuth.js', () => ({
   resolveRepositoryInstallation: vi.fn(),
 }));
 
+vi.mock('../services/github/client.js', () => ({
+  githubClient: {
+    ensureLabels: vi.fn().mockResolvedValue({ created: [], existing: [] }),
+  },
+}));
+
 // Mock the projectService
 vi.mock('../services/projectService.js', () => ({
   getAllProjects: vi.fn(),
@@ -60,6 +66,7 @@ import { saveConversationUpload } from '../services/documentation.js';
 import { loadAgentModelSettings } from '../services/agentModelSettings.js';
 import { getCredentialStore } from '../services/credentials/registry.js';
 import { getGitHubAppHealth, resolveRepositoryInstallation } from '../services/github/appAuth.js';
+import { githubClient } from '../services/github/client.js';
 
 describe('Projects Routes - Phase 3', () => {
   let app: import("express").Application;
@@ -250,6 +257,8 @@ describe('Projects Routes - Phase 3', () => {
       expect(response.status).toBe(200);
       expect(response.body).toEqual(updatedProject);
       expect(updateProject).toHaveBeenCalledWith(1, testUserId, { name: 'Updated Name' });
+      // No GitHub automation on this project → no label provisioning.
+      expect(githubClient.ensureLabels).not.toHaveBeenCalled();
     });
 
     it('should return 404 if project not found', async () => {
@@ -369,6 +378,8 @@ describe('Projects Routes - Phase 3', () => {
       expect(projectsDb.updateGitHubIdentity).toHaveBeenCalledWith(1, 'canonical/repo', 100, 10);
       expect(userDb.getGitConfig).not.toHaveBeenCalled();
       expect(response.body.github_repository_id).toBe(100);
+      // Workflow labels are provisioned (best-effort) once automation is on.
+      expect(githubClient.ensureLabels).toHaveBeenCalledTimes(1);
     });
 
     it('returns a stable GitHub App health error code', async () => {

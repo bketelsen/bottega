@@ -18,6 +18,7 @@ import {
   type GitHubAuthMode,
   type GitHubRepositoryAuth,
 } from './appAuth.js';
+import { WORKFLOW_LABELS, type WorkflowLabelSpec } from './workflowLabels.js';
 
 export interface GitHubUser {
   login: string;
@@ -503,6 +504,50 @@ export class GitHubClient {
     }
     const additions = changes.add.filter((label) => !byLowerName.has(label.toLowerCase()));
     if (additions.length > 0) await this.addLabels(project, issueNumber, additions);
+  }
+
+  /**
+   * Ensure the given repository-level labels exist, creating any that are
+   * missing. Idempotent: existing labels are matched case-insensitively by
+   * name and left untouched (color/description are never clobbered). A 422
+   * "already exists" from a concurrent create is treated as benign. Returns
+   * which labels were created vs. already present. Requires the `label`
+   * capability (advisory tier), so it works for any automation-enabled project.
+   */
+  async ensureLabels(
+    project: GitHubProject,
+    labels: readonly WorkflowLabelSpec[] = WORKFLOW_LABELS,
+  ): Promise<{ created: string[]; existing: string[] }> {
+    const current = await this.readPages<GitHubLabel>(
+      project,
+      `${this.repoPath(this.repoOf(project))}/labels`,
+    );
+    const have = new Set(current.map((label) => label.name.toLowerCase()));
+    const created: string[] = [];
+    const existing: string[] = [];
+    for (const label of labels) {
+      if (have.has(label.name.toLowerCase())) {
+        existing.push(label.name);
+        continue;
+      }
+      try {
+        await this.mutate<GitHubLabel>(project, 'label', 'labels', 'POST', {
+          name: label.name,
+          color: label.color,
+          description: label.description,
+        });
+        created.push(label.name);
+      } catch (error) {
+        // A concurrent create (or a label that appeared between list and
+        // create) returns 422 — treat as already-present rather than failing.
+        if (error instanceof GitHubClientError && error.details.status === 422) {
+          existing.push(label.name);
+          continue;
+        }
+        throw error;
+      }
+    }
+    return { created, existing };
   }
 
   async addReaction(
