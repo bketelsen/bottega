@@ -444,3 +444,74 @@ describe('GitHubClient mutations', () => {
     expect(create).not.toHaveBeenCalled();
   });
 });
+
+describe('GitHubClient.ensureLabels', () => {
+  const auth = {
+    token: 'installation-secret',
+    expiresAt: Date.now() + 60_000,
+    installationId: 10,
+    repositoryId: 100,
+    repository: 'owner/repo',
+    botLogin: 'bottega[bot]',
+    botUserId: 99,
+    botEmail: '99+bottega[bot]@users.noreply.github.com',
+  };
+  const clientOptions = () => ({
+    authMode: () => 'app' as const,
+    resolveRepositoryAuth: vi.fn().mockResolvedValue(auth),
+    loadProject: () => project('pr'),
+    ghConfigDir: '/tmp/bottega-test-gh',
+  });
+
+  it('creates only the missing labels and matches existing ones case-insensitively', async () => {
+    // readPages returns pages (T[][]) that the client flattens.
+    const runner = vi.fn()
+      .mockResolvedValueOnce(ok([[{ id: 1, name: 'ready', color: '0e8a16', description: null }]]))
+      .mockResolvedValueOnce(ok({ id: 2, name: 'Needs Refinement' }))
+      .mockResolvedValueOnce(ok({ id: 3, name: 'Refined' }))
+      .mockResolvedValueOnce(ok({ id: 4, name: 'In Review' }));
+    const client = new GitHubClient({ runner, ...clientOptions() });
+
+    const result = await client.ensureLabels(project('pr'));
+
+    expect(result.created).toEqual(['Needs Refinement', 'Refined', 'In Review']);
+    expect(result.existing).toEqual(['Ready']);
+    // 1 list + 3 creates
+    expect(runner).toHaveBeenCalledTimes(4);
+    // The list hits the repo-level labels endpoint.
+    expect(runner.mock.calls[0]![1]).toContain('repos/owner/repo/labels');
+  });
+
+  it('creates nothing when every label already exists', async () => {
+    const runner = vi.fn().mockResolvedValueOnce(ok([[
+      { id: 1, name: 'Needs Refinement' },
+      { id: 2, name: 'Ready' },
+      { id: 3, name: 'Refined' },
+      { id: 4, name: 'In Review' },
+    ]]));
+    const client = new GitHubClient({ runner, ...clientOptions() });
+
+    const result = await client.ensureLabels(project('pr'));
+
+    expect(result.created).toEqual([]);
+    expect(result.existing).toEqual(['Needs Refinement', 'Ready', 'Refined', 'In Review']);
+    expect(runner).toHaveBeenCalledTimes(1); // only the list, no creates
+  });
+
+  it('treats a 422 already-exists during create as benign', async () => {
+    const conflict = Object.assign(new Error('failed'), { stderr: 'HTTP 422 already_exists' });
+    const runner = vi.fn()
+      .mockResolvedValueOnce(ok([[]])) // no existing labels
+      .mockRejectedValueOnce(conflict) // Needs Refinement -> 422
+      .mockResolvedValueOnce(ok({ id: 2, name: 'Ready' }))
+      .mockResolvedValueOnce(ok({ id: 3, name: 'Refined' }))
+      .mockResolvedValueOnce(ok({ id: 4, name: 'In Review' }));
+    const client = new GitHubClient({ runner, ...clientOptions() });
+
+    const result = await client.ensureLabels(project('pr'));
+
+    expect(result.created).toEqual(['Ready', 'Refined', 'In Review']);
+    expect(result.existing).toEqual(['Needs Refinement']);
+  });
+});
+
