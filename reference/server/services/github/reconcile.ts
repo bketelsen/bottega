@@ -452,7 +452,7 @@ async function reconcilePullRequestSnapshot(
     task = tasksDb.update(task.id, { github_pr_number: prNumber }) ?? task;
   }
 
-  if (task.status === 'completed' || task.workflow_blocked || task.pr_agent_complete) return 'open';
+  if (task.status === 'completed' || task.workflow_blocked) return 'open';
   if ((task.workflow_run_count ?? 0) >= MAX_WORKFLOW_RUNS) {
     tasksDb.blockWorkflow(task.id);
     return 'open';
@@ -470,6 +470,16 @@ async function reconcilePullRequestSnapshot(
     { isRunActive: () => hasRunningAgent(reconciledTaskId) },
   );
   if (!wrote || !can(project, 'push')) return 'open';
+
+  // The PR is actionable with evidence we haven't processed yet. If a previous
+  // repair already finished (pr_agent_complete), re-arm it so this fresh state
+  // — main advancing and re-conflicting the branch, a new failing CI check, or
+  // a new CHANGES_REQUESTED review — triggers another repair pass. The evidence
+  // hash above guarantees we only do this for genuinely new state, and
+  // MAX_WORKFLOW_RUNS bounds the retries before the task is auto-blocked.
+  if (task.pr_agent_complete) {
+    tasksDb.resetPrAgentComplete(task.id);
+  }
 
   await startAgentRun(task.id, 'pr', { userId: task.user_id ?? project.user_id });
   tasksDb.update(task.id, { github_pr_evidence_hash: hash });
