@@ -219,7 +219,7 @@ describe('buildAgentRunCompletionHandler', () => {
     expect(startAgentRun).not.toHaveBeenCalled();
   });
 
-  it.each([0, undefined])('fails planning without its completion signal when completion is %s', async (planificationComplete) => {
+  it.each([0, undefined])('leaves planning running (awaiting clarification) without its completion signal when completion is %s', async (planificationComplete) => {
     const c = ctx();
     vi.mocked(agentRunsDb.getByTask).mockReturnValue([
       { id: 9, conversation_id: 100, agent_type: 'planification', status: 'running' }
@@ -236,13 +236,82 @@ describe('buildAgentRunCompletionHandler', () => {
     await buildAgentRunCompletionHandler(c)('success');
     await vi.advanceTimersByTimeAsync(2000);
 
+    // Non-terminal waiting state: not failed, not completed, not synced, not chained.
+    expect(agentRunsDb.updateStatus).not.toHaveBeenCalled();
     expect(syncPlannedTaskToGitHub).not.toHaveBeenCalled();
     expect(startAgentRun).not.toHaveBeenCalled();
-    expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(9, 'failed');
+    expect(c.broadcastToTaskSubscribersFn).not.toHaveBeenCalled();
+  });
+
+  it('recovers a failed planning run to completed once the plan completes in the same conversation (GitHub-backed)', async () => {
+    const c = ctx();
+    vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+      { id: 9, conversation_id: 100, agent_type: 'planification', status: 'failed' }
+    ] as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({
+      id: 7,
+      project_id: 1,
+      github_issue_number: 31,
+      planification_complete: 1,
+      workflow_run_count: 0
+    } as never);
+    vi.mocked(userDb.getUserById).mockReturnValue({ id: 1, is_technical: 0 } as never);
+
+    await buildAgentRunCompletionHandler(c)('success');
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(9, 'completed');
     expect(c.broadcastToTaskSubscribersFn).toHaveBeenCalledWith(7, {
       type: 'agent-run-updated',
-      agentRun: { id: 9, status: 'failed', agent_type: 'planification', conversation_id: 100 },
+      agentRun: { id: 9, status: 'completed', agent_type: 'planification', conversation_id: 100 },
     });
+    // GitHub-backed planning is terminal — sync up, do not auto-chain.
+    expect(syncPlannedTaskToGitHub).toHaveBeenCalledWith(7);
+    expect(startAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('recovers a failed local planning run and chains into implementation for a non-technical actor', async () => {
+    const c = ctx();
+    vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+      { id: 9, conversation_id: 100, agent_type: 'planification', status: 'failed' }
+    ] as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, workflow_run_count: 0, planification_complete: 1 } as never);
+    vi.mocked(tasksDb.getWithProject).mockReturnValue({ repo_folder_path: '/r', user_id: 1 } as never);
+    vi.mocked(userDb.getUserById).mockReturnValue({ id: 1, is_technical: 0 } as never);
+
+    await buildAgentRunCompletionHandler(c)('success');
+    expect(agentRunsDb.updateStatus).toHaveBeenCalledWith(9, 'completed');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(startAgentRun).toHaveBeenCalledWith(7, 'implementation', expect.objectContaining({ userId: 1 }));
+  });
+
+  it.each(['aborted', 'error'] as const)('does not recover a failed planning run on %s', async (outcome) => {
+    const c = ctx();
+    vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+      { id: 9, conversation_id: 100, agent_type: 'planification', status: 'failed' }
+    ] as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, planification_complete: 1, workflow_run_count: 0 } as never);
+
+    await buildAgentRunCompletionHandler(c)(outcome);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(agentRunsDb.updateStatus).not.toHaveBeenCalled();
+    expect(syncPlannedTaskToGitHub).not.toHaveBeenCalled();
+    expect(startAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('does not recover a failed planning run while the plan is still incomplete', async () => {
+    const c = ctx();
+    vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+      { id: 9, conversation_id: 100, agent_type: 'planification', status: 'failed' }
+    ] as never);
+    vi.mocked(tasksDb.getById).mockReturnValue({ id: 7, planification_complete: 0, workflow_run_count: 0 } as never);
+
+    await buildAgentRunCompletionHandler(c)('success');
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(agentRunsDb.updateStatus).not.toHaveBeenCalled();
+    expect(startAgentRun).not.toHaveBeenCalled();
   });
 
   it('finalizes a ready PR run when its successful lifecycle completes', async () => {
