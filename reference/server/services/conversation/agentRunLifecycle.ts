@@ -50,21 +50,11 @@ export function buildAgentRunCompletionHandler(
 
     if (linkedAgentRun) {
       const { id: agentRunId, agent_type: agentType, status } = linkedAgentRun;
+      // Read the task AFTER the turn so `planification_complete` reflects any
+      // completion signal written during this turn.
+      const completedTask = tasksDb.getById(taskId);
 
-      if (status === 'running') {
-        const completedTask = tasksDb.getById(taskId);
-        const missingPlanningSignal = outcome === 'success'
-          && agentType === 'planification'
-          && !completedTask?.planification_complete;
-        const nextStatus = outcome === 'success' && !missingPlanningSignal ? 'completed' : 'failed';
-        agentRunsDb.updateStatus(agentRunId, nextStatus);
-        console.log(`[ConversationAdapter] Agent run ${agentRunId} (${agentType}) ${nextStatus}`);
-        if (missingPlanningSignal) {
-          console.error(
-            `[ConversationAdapter] Planning run ${agentRunId} ended without the required completion signal`,
-          );
-        }
-
+      const broadcastRunStatus = (nextStatus: 'completed' | 'failed'): void => {
         if (broadcastToTaskSubscribersFn) {
           broadcastToTaskSubscribersFn(taskId, {
             type: 'agent-run-updated',
@@ -76,54 +66,80 @@ export function buildAgentRunCompletionHandler(
             },
           });
         }
+      };
 
-        if (outcome === 'success' && !missingPlanningSignal) {
-          let githubPlanningTerminal = false;
-          if (agentType === 'planification' && completedTask?.github_issue_number) {
-            githubPlanningTerminal = true;
-            if (completedTask.planification_complete) {
+      if (status === 'running') {
+        // A planification turn that ends successfully WITHOUT the completion
+        // signal is almost always the planner asking the user a clarifying
+        // question. That is a non-terminal waiting state — NOT a failure — so
+        // leave the run 'running' and let a reply in the same conversation
+        // finish the plan (the `status === 'running'` branch will complete and
+        // chain it on that turn). The user can still Stop the run to fail it.
+        const awaitingClarification = outcome === 'success'
+          && agentType === 'planification'
+          && !completedTask?.planification_complete;
+
+        if (awaitingClarification) {
+          console.log(
+            `[ConversationAdapter] Planning run ${agentRunId} awaiting clarification — run stays active`,
+          );
+        } else {
+          const nextStatus = outcome === 'success' ? 'completed' : 'failed';
+          agentRunsDb.updateStatus(agentRunId, nextStatus);
+          console.log(`[ConversationAdapter] Agent run ${agentRunId} (${agentType}) ${nextStatus}`);
+          broadcastRunStatus(nextStatus);
+
+          if (outcome === 'success') {
+            if (agentType === 'planification') {
+              shouldChain = (await finalizePlanificationSuccess(taskId)).chain;
+            } else if (agentType === 'pr') {
               try {
-                const { syncPlannedTaskToGitHub } = await import('../github/reconcile.js');
-                await syncPlannedTaskToGitHub(taskId);
+                const { finalizePrAgentRun } = await import('../github/finalize.js');
+                const result = await finalizePrAgentRun(taskId, agentRunId);
+                if (!result.success && !result.skipped) {
+                  console.error(`[ConversationAdapter] Failed to finalize task ${taskId} PR: ${result.error}`);
+                }
               } catch (err) {
-                console.error(`[ConversationAdapter] Failed to sync planned task ${taskId} to GitHub:`, err);
+                console.error(`[ConversationAdapter] Failed to finalize task ${taskId} PR:`, err);
               }
-            }
-          } else if (agentType === 'pr') {
-            try {
-              const { finalizePrAgentRun } = await import('../github/finalize.js');
-              const result = await finalizePrAgentRun(taskId, agentRunId);
-              if (!result.success && !result.skipped) {
-                console.error(`[ConversationAdapter] Failed to finalize task ${taskId} PR: ${result.error}`);
+            } else if (agentType === 'yolo') {
+              if (completedTask?.workflow_complete) {
+                try {
+                  const { ensureTaskPullRequest } = await import('../prService.js');
+                  const result = await ensureTaskPullRequest(taskId);
+                  if (!result.success) {
+                    console.error(`[ConversationAdapter] Failed to publish YOLO task ${taskId}: ${result.error}`);
+                  }
+                } catch (err) {
+                  console.error(`[ConversationAdapter] Failed to publish YOLO task ${taskId}:`, err);
+                }
               }
-            } catch (err) {
-              console.error(`[ConversationAdapter] Failed to finalize task ${taskId} PR:`, err);
+            } else if (
+              agentType === 'implementation' ||
+              agentType === 'review' ||
+              agentType === 'refinement'
+            ) {
+              shouldChain = true;
             }
-          } else if (agentType === 'yolo' && completedTask?.workflow_complete) {
-            try {
-              const { ensureTaskPullRequest } = await import('../prService.js');
-              const result = await ensureTaskPullRequest(taskId);
-              if (!result.success) {
-                console.error(`[ConversationAdapter] Failed to publish YOLO task ${taskId}: ${result.error}`);
-              }
-            } catch (err) {
-              console.error(`[ConversationAdapter] Failed to publish YOLO task ${taskId}:`, err);
-            }
-          }
-
-          // Chain implementation/review/refinement, plus planification for
-          // non-technical owners (handleAgentChaining decides per-owner).
-          // GitHub-backed planning and the PR agent are terminal here: GitHub
-          // approval/reconciliation owns their next transition.
-          if (
-            (agentType === 'planification' && !githubPlanningTerminal) ||
-            agentType === 'implementation' ||
-            agentType === 'review' ||
-            agentType === 'refinement'
-          ) {
-            shouldChain = true;
           }
         }
+      } else if (
+        agentType === 'planification'
+        && outcome === 'success'
+        && (status === 'failed' || status === 'blocked')
+        && completedTask?.planification_complete
+      ) {
+        // Recovery: an earlier turn — or the startup orphan-sweep after a
+        // restart during the clarification wait — left this planning run
+        // failed, but a later turn in the SAME conversation has now written
+        // the plan and set planification_complete. Transition to completed and
+        // resume chaining so the workflow isn't stranded.
+        agentRunsDb.updateStatus(agentRunId, 'completed');
+        console.log(
+          `[ConversationAdapter] Recovered planning run ${agentRunId} to completed after clarification`,
+        );
+        broadcastRunStatus('completed');
+        shouldChain = (await finalizePlanificationSuccess(taskId)).chain;
       } else {
         // status='failed' (user aborted) is the expected non-running case.
         // Anything else is a state we didn't model — log so it's visible.
@@ -155,6 +171,28 @@ export function buildAgentRunCompletionHandler(
       });
     }
   };
+}
+
+/**
+ * Post-success handling for a planification run. GitHub-backed planning is
+ * terminal here — human approval / reconciliation owns the transition to
+ * implementation, so we sync the freshly-written plan up and do NOT chain.
+ * Local (non-GitHub) planning chains straight into the implementation loop.
+ */
+async function finalizePlanificationSuccess(taskId: number): Promise<{ chain: boolean }> {
+  const task = tasksDb.getById(taskId);
+  if (task?.github_issue_number) {
+    if (task.planification_complete) {
+      try {
+        const { syncPlannedTaskToGitHub } = await import('../github/reconcile.js');
+        await syncPlannedTaskToGitHub(taskId);
+      } catch (err) {
+        console.error(`[ConversationAdapter] Failed to sync planned task ${taskId} to GitHub:`, err);
+      }
+    }
+    return { chain: false };
+  }
+  return { chain: true };
 }
 
 /**
