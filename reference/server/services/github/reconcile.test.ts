@@ -10,6 +10,7 @@ vi.mock('../../database/db.js', () => ({
     getByGithubPr: vi.fn(),
     update: vi.fn(),
     markPrAgentComplete: vi.fn(),
+    resetPrAgentComplete: vi.fn(),
     blockWorkflow: vi.fn(),
   },
   agentRunsDb: { getByTask: vi.fn().mockReturnValue([]) },
@@ -621,7 +622,6 @@ describe('PR reconciliation', () => {
   it.each([
     ['completed', { status: 'completed' }],
     ['blocked', { workflow_blocked: 1 }],
-    ['PR-complete', { pr_agent_complete: 1 }],
   ])('does not start a PR agent for a %s task', async (_name, state) => {
     vi.mocked(githubClient.getPullRequest).mockResolvedValue(pr as never);
     vi.mocked(tasksDb.getByGithubPr).mockReturnValue({
@@ -632,6 +632,40 @@ describe('PR reconciliation', () => {
 
     await reconcilePullRequest(1, 44);
 
+    expect(startAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('re-arms a PR-complete task and starts a repair PR agent on new actionable evidence', async () => {
+    // main advanced and re-conflicted the branch after the initial PR run.
+    vi.mocked(githubClient.getPullRequest).mockResolvedValue(pr as never);
+    vi.mocked(tasksDb.getByGithubPr).mockReturnValue({
+      ...task,
+      github_pr_number: 44,
+      pr_agent_complete: 1,
+      github_pr_evidence_hash: 'stale-different-hash',
+    } as never);
+
+    await reconcilePullRequest(1, 44);
+
+    expect(tasksDb.resetPrAgentComplete).toHaveBeenCalledWith(7);
+    expect(startAgentRun).toHaveBeenCalledWith(7, 'pr', { userId: 42 });
+    expect(tasksDb.update).toHaveBeenCalledWith(7, {
+      github_pr_evidence_hash: _internal.pullRequestHash(pr as never),
+    });
+  });
+
+  it('does not re-arm a PR-complete task when the actionable evidence is unchanged', async () => {
+    vi.mocked(githubClient.getPullRequest).mockResolvedValue(pr as never);
+    vi.mocked(tasksDb.getByGithubPr).mockReturnValue({
+      ...task,
+      github_pr_number: 44,
+      pr_agent_complete: 1,
+      github_pr_evidence_hash: _internal.pullRequestHash(pr as never),
+    } as never);
+
+    await reconcilePullRequest(1, 44);
+
+    expect(tasksDb.resetPrAgentComplete).not.toHaveBeenCalled();
     expect(startAgentRun).not.toHaveBeenCalled();
   });
 
