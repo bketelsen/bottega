@@ -224,6 +224,8 @@ function AgentPromptsTab() {
                 <div className="mt-1 text-xs text-muted-foreground">
                   {detail.kind === 'template' ? (
                     <span>Free-form markdown template — read as-is by the agent, no variable substitution.</span>
+                  ) : detail.variables.length === 0 ? (
+                    <span>Free-form text prepended to every agent prompt — no template variables.</span>
                   ) : (
                     <>
                       Available variables:{' '}

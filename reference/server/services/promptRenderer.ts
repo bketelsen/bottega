@@ -15,6 +15,39 @@ const TSX_CLI_PATH = require.resolve('tsx/cli');
 const SERVER_OWNED_PUBLICATION_PROMPTS = new Set(['pr', 'pr-feedback', 'yolo']);
 const PLANNING_PROMPTS = new Set(['planification', 'planification-nontechnical']);
 
+// The operator-editable "Global" prompt. Its content (when non-empty) is
+// prepended to every rendered agent prompt so deployment-wide rules — host
+// details, environment conventions, tool preferences — reach every agent
+// without editing each per-agent template. It ships empty (no-op) by default.
+const GLOBAL_PROMPT_NAME = 'global';
+
+/**
+ * Load the operator-configured Global prompt (override or default) and wrap it
+ * in a labeled preamble block. Returns '' when the Global prompt is empty or
+ * unset, so nothing is injected. Never runs {{var}} substitution — the Global
+ * prompt is free-form operator text with no template variables.
+ */
+function loadGlobalPreamble(): string {
+  let content: string;
+  try {
+    content = loadPrompt(GLOBAL_PROMPT_NAME);
+  } catch {
+    // Definition or default file missing — treat as no global prompt.
+    return '';
+  }
+  const trimmed = content.trim();
+  if (!trimmed) return '';
+  return `## Global Operator Instructions
+
+These deployment-wide rules apply to every agent in this environment (host details, tooling conventions, and similar operator guidance). Follow them unless a mandatory invariant below explicitly overrides them.
+
+${trimmed}
+
+---
+
+`;
+}
+
 function planningCompletionInvariant(command: unknown): string {
   return `
 
@@ -136,6 +169,13 @@ export interface PromptDefinition {
 }
 
 const PROMPT_DEFINITIONS: PromptDefinition[] = [
+  {
+    name: 'global',
+    label: 'Global',
+    kind: 'prompt',
+    file: 'global.md',
+    variables: [],
+  },
   {
     name: 'planification',
     label: 'Planification',
@@ -353,12 +393,20 @@ export function findUnknownVariables(name: string, content: string): string[] {
  */
 export function renderPrompt(name: string, vars: Record<string, unknown>): string {
   const rendered = render(loadPrompt(name), vars);
+  let body: string;
   if (PLANNING_PROMPTS.has(name)) {
-    return `${rendered.trimEnd()}${planningCompletionInvariant(vars.completePlanCommand)}\n`;
+    body = `${rendered.trimEnd()}${planningCompletionInvariant(vars.completePlanCommand)}\n`;
+  } else if (name === 'review') {
+    body = `${rendered.trimEnd()}${reviewCompletionInvariant(vars.taskId)}\n`;
+  } else if (SERVER_OWNED_PUBLICATION_PROMPTS.has(name)) {
+    body = `${rendered.trimEnd()}${serverOwnedPublicationInvariant(name, vars.taskId)}\n`;
+  } else {
+    body = rendered;
   }
-  if (name === 'review') {
-    return `${rendered.trimEnd()}${reviewCompletionInvariant(vars.taskId)}\n`;
-  }
-  if (!SERVER_OWNED_PUBLICATION_PROMPTS.has(name)) return rendered;
-  return `${rendered.trimEnd()}${serverOwnedPublicationInvariant(name, vars.taskId)}\n`;
+  // Prepend the operator's Global prompt to every agent prompt. It goes ABOVE
+  // the base prompt (and thus above the appended mandatory invariants), so the
+  // server-owned invariants retain their stated higher priority over operator
+  // text. The Global prompt is never injected into itself.
+  if (name === GLOBAL_PROMPT_NAME) return body;
+  return `${loadGlobalPreamble()}${body}`;
 }
