@@ -118,6 +118,14 @@ describe('promptRenderer', () => {
       expect(def!.variables).toEqual([]);
     });
 
+    it('registers the Global prompt as a variable-free agent prompt', () => {
+      const def = getPromptDefinition('global');
+      expect(def).not.toBeNull();
+      expect(def!.kind).toBe('prompt');
+      expect(def!.variables).toEqual([]);
+      expect(listPromptNames()).toContain('global');
+    });
+
     it('exposes planTemplatePath as an allowed variable on planification prompts', () => {
       expect(getPromptDefinition('planification')!.variables).toContain('planTemplatePath');
       expect(getPromptDefinition('planification-nontechnical')!.variables).toContain('planTemplatePath');
@@ -219,6 +227,47 @@ describe('promptRenderer', () => {
       expect(out).toContain('Mandatory Review Completion Invariant');
       expect(out.split(resolveScriptCommand('complete-workflow.ts', 99))).toHaveLength(2);
       expect(out.split(resolveScriptCommand('block-workflow.ts', 99))).toHaveLength(2);
+    });
+  });
+
+  describe('Global prompt injection', () => {
+    it('injects nothing when the Global prompt is empty (default)', () => {
+      const out = renderPrompt('implementation', { taskDocPath: '/x/y.md', taskId: 7 });
+      expect(out).not.toContain('Global Operator Instructions');
+    });
+
+    it('prepends the Global prompt to a rendered agent prompt when set', () => {
+      saveOverride('global', 'Use `brew` to install missing dependencies, never `apt`.');
+      const out = renderPrompt('implementation', { taskDocPath: '/x/y.md', taskId: 7 });
+      expect(out).toContain('Global Operator Instructions');
+      expect(out).toContain('Use `brew` to install missing dependencies, never `apt`.');
+      // Global text sits ABOVE the base prompt body.
+      expect(out.indexOf('Global Operator Instructions')).toBeLessThan(out.indexOf('/x/y.md'));
+    });
+
+    it('keeps mandatory invariants below the Global prompt (invariants stay authoritative)', () => {
+      saveOverride('global', 'Operator rule.');
+      const out = renderPrompt('pr', {
+        taskDocPath: '/x/y.md',
+        taskId: 99,
+        prContextLine: '- No PR exists yet',
+      });
+      expect(out.indexOf('Global Operator Instructions')).toBeLessThan(
+        out.indexOf('Mandatory Server-Owned Publication Invariant'),
+      );
+    });
+
+    it('is a no-op when the Global prompt is only whitespace', () => {
+      saveOverride('global', '   \n\t  \n');
+      const out = renderPrompt('review', { taskDocPath: '/x/y.md', taskId: 7 });
+      expect(out).not.toContain('Global Operator Instructions');
+    });
+
+    it('never injects the Global prompt into itself', () => {
+      saveOverride('global', 'Operator rule.');
+      const out = renderPrompt('global', {});
+      expect(out).toBe('Operator rule.');
+      expect(out).not.toContain('Global Operator Instructions');
     });
   });
 
