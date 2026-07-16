@@ -72,6 +72,9 @@ export interface PromptConcurrentEditError {
 export interface AppSettings {
   internal_tool_name: string;
   github_pr_trigger: string;
+  // 'true' | 'false' — force the review agent onto a different provider than
+  // the one that wrote the code (opt-in adversarial cross-model review).
+  review_cross_model: string;
 }
 
 export type GetAppSettingsResponse = AppSettings;
@@ -113,3 +116,4 @@ export interface ListCommandsResponse {
 
 expectType<keyof AppSettings>('internal_tool_name');
 expectType<keyof AppSettings>('github_pr_trigger');
+expectType<keyof AppSettings>('review_cross_model');

@@ -34,12 +34,13 @@ function Settings({
 }: SettingsProps) {
   const { isDarkMode, toggleDarkMode } = useTheme();
   const { user, updateProfile } = useAuth();
-  const { internalToolName, githubPrTrigger, refresh: refreshAppSettings } = useAppSettings();
+  const { internalToolName, githubPrTrigger, reviewCrossModel, refresh: refreshAppSettings } = useAppSettings();
   const [isTechnical, setIsTechnical] = useState(true);
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [toolNameDraft, setToolNameDraft] = useState(internalToolName);
   const [triggerDraft, setTriggerDraft] = useState(githubPrTrigger);
+  const [reviewCrossModelDraft, setReviewCrossModelDraft] = useState(reviewCrossModel);
   const [isSavingAppSettings, setIsSavingAppSettings] = useState(false);
   const [appSettingsError, setAppSettingsError] = useState<string | null>(null);
   const [appSettingsStatus, setAppSettingsStatus] = useState<SaveStatus>(null);
@@ -107,15 +108,17 @@ function Settings({
     if (isOpen) {
       setToolNameDraft(internalToolName);
       setTriggerDraft(githubPrTrigger);
+      setReviewCrossModelDraft(reviewCrossModel);
       setAppSettingsError(null);
       setAppSettingsStatus(null);
     }
-  }, [isOpen, internalToolName, githubPrTrigger]);
+  }, [isOpen, internalToolName, githubPrTrigger, reviewCrossModel]);
 
   const isAdmin = user?.is_admin === 1;
   const appSettingsDirty =
     toolNameDraft.trim() !== internalToolName ||
-    triggerDraft.trim().replace(/^@+/, '').toLowerCase() !== githubPrTrigger;
+    triggerDraft.trim().replace(/^@+/, '').toLowerCase() !== githubPrTrigger ||
+    reviewCrossModelDraft !== reviewCrossModel;
 
   const handleSaveAppSettings = async () => {
     setAppSettingsError(null);
@@ -124,7 +127,8 @@ function Settings({
     try {
       const payload = {
         internal_tool_name: toolNameDraft.trim(),
-        github_pr_trigger: triggerDraft.trim().replace(/^@+/, '').toLowerCase()
+        github_pr_trigger: triggerDraft.trim().replace(/^@+/, '').toLowerCase(),
+        review_cross_model: reviewCrossModelDraft ? 'true' : 'false'
       };
       const res = await api.appSettings.update(payload);
       if (!res.ok) {
@@ -410,6 +414,29 @@ function Settings({
               style={{ fontSize: '16px' }}
             />
           </div>
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor="review-cross-model" className="flex items-start gap-2 cursor-pointer">
+            <input
+              id="review-cross-model"
+              type="checkbox"
+              checked={reviewCrossModelDraft}
+              onChange={(e) => setReviewCrossModelDraft(e.target.checked)}
+              disabled={!isAdmin || isSavingAppSettings}
+              className="mt-1"
+            />
+            <span>
+              <span className="block font-medium text-foreground">
+                Adversarial cross-model review
+              </span>
+              <span className="block text-sm text-muted-foreground">
+                Run the review agent on a different provider than the one that wrote the
+                code, using an adversarial review prompt. Users with only one connected
+                provider are unaffected (review falls back to their configured provider).
+              </span>
+            </span>
+          </label>
         </div>
 
         {appSettingsError && (

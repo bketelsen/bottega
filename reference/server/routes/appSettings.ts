@@ -21,6 +21,7 @@ const router = express.Router();
 const ALLOWED_KEYS = new Set<keyof UpdateAppSettingsRequest>([
   'internal_tool_name',
   'github_pr_trigger',
+  'review_cross_model',
 ]);
 
 const MAX_VALUE_LENGTH = 100;
@@ -64,6 +65,14 @@ router.put(
         if (!/^[a-z0-9][a-z0-9_-]*$/.test(value)) {
           return res.status(400).json({
             error: 'github_pr_trigger must contain only letters, digits, hyphens, or underscores',
+          });
+        }
+      }
+      if (key === 'review_cross_model') {
+        value = value.toLowerCase();
+        if (value !== 'true' && value !== 'false') {
+          return res.status(400).json({
+            error: "review_cross_model must be 'true' or 'false'",
           });
         }
       }

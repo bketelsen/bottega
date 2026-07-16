@@ -1752,6 +1752,11 @@ const agentRunsDb = {
 const APP_SETTINGS_DEFAULTS: Record<string, string> = {
   internal_tool_name: 'Bottega',
   github_pr_trigger: 'bottega',
+  // Adversarial cross-model review: when 'true', the `review` agent is forced
+  // onto a provider different from the one that wrote the code (falling back to
+  // the configured review provider when the user has only one connected
+  // provider). Stored as a 'true'/'false' string. See agentModelSettings.ts.
+  review_cross_model: 'false',
 };
 
 const appSettingsDb = {

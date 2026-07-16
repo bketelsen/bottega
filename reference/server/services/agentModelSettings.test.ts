@@ -37,6 +37,7 @@ import {
   loadAgentModelSettings,
   ensureUserAgentModelSettings,
   resolveResumeModelEffort,
+  resolveReviewAgentSetting,
   MissingUserAgentSettingsError,
 } from './agentModelSettings.js';
 import { userAgentModelSettingsDb, userDb, agentRunsDb } from '../database/db.js';
@@ -253,3 +254,53 @@ describe('resolveResumeModelEffort', () => {
     expect(resolveResumeModelEffort(convo, USER)).toEqual({ model: 'opus', effort: 'high' });
   });
 });
+
+describe('resolveReviewAgentSetting (adversarial cross-model review)', () => {
+  const anthropicReview: AgentModelSetting = { provider: 'anthropic', model: 'opus', effort: 'high' };
+
+  it('returns the configured review setting when the author provider is unknown', async () => {
+    vi.mocked(userAgentModelSettingsDb.getRaw).mockReturnValue(fullBlob(anthropicReview));
+    connectProviders('anthropic', 'openai');
+    const result = await resolveReviewAgentSetting(USER, null);
+    expect(result).toEqual(anthropicReview);
+  });
+
+  it('falls back to the configured review setting for a single-provider user', async () => {
+    // author=anthropic, only anthropic connected → no alternate provider.
+    vi.mocked(userAgentModelSettingsDb.getRaw).mockReturnValue(fullBlob(anthropicReview));
+    connectProviders('anthropic');
+    const result = await resolveReviewAgentSetting(USER, 'anthropic');
+    expect(result).toEqual(anthropicReview);
+  });
+
+  it('swaps to a connected alternate provider using its first live model', async () => {
+    // author=anthropic, openai also connected, no configured openai entry to reuse.
+    vi.mocked(userAgentModelSettingsDb.getRaw).mockReturnValue(fullBlob(anthropicReview));
+    connectProviders('anthropic', 'openai');
+    const result = await resolveReviewAgentSetting(USER, 'anthropic');
+    expect(result).toEqual({ provider: 'openai', model: 'gpt-current-codex', effort: 'medium' });
+  });
+
+  it("reuses a model the user already configured for the alternate provider", async () => {
+    // review=anthropic, but planification=openai:gpt-5.5 — reuse that, don't fetch live.
+    const blob: Record<string, AgentModelSetting> = {};
+    for (const a of AGENT_TYPES_WITH_SETTINGS) blob[a] = anthropicReview;
+    blob.planification = { provider: 'openai', model: 'gpt-5.5', effort: 'high' };
+    vi.mocked(userAgentModelSettingsDb.getRaw).mockReturnValue(JSON.stringify(blob));
+    connectProviders('anthropic', 'openai');
+    const result = await resolveReviewAgentSetting(USER, 'anthropic');
+    expect(result).toEqual({ provider: 'openai', model: 'gpt-5.5', effort: 'high' });
+    expect(listCodexModels).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicit, already-diverse, still-connected review choice', async () => {
+    // review configured to openai, author=anthropic, openai connected → keep it.
+    vi.mocked(userAgentModelSettingsDb.getRaw).mockReturnValue(
+      fullBlob({ provider: 'openai', model: 'gpt-5.5', effort: 'high' }),
+    );
+    connectProviders('anthropic', 'openai');
+    const result = await resolveReviewAgentSetting(USER, 'anthropic');
+    expect(result).toEqual({ provider: 'openai', model: 'gpt-5.5', effort: 'high' });
+  });
+});
+

@@ -68,4 +68,23 @@ describe('PUT /api/app-settings', () => {
     expect(res.body.error).toMatch(/Unknown setting key: agent_model_settings/);
     expect(appSettingsDb.setValue).not.toHaveBeenCalled();
   });
+
+  it('accepts a boolean review_cross_model toggle', async () => {
+    const res = await request(app)
+      .put('/api/app-settings')
+      .send({ review_cross_model: 'true' });
+
+    expect(res.status).toBe(200);
+    expect(appSettingsDb.setValue).toHaveBeenCalledWith('review_cross_model', 'true');
+  });
+
+  it('rejects a non-boolean review_cross_model', async () => {
+    const res = await request(app)
+      .put('/api/app-settings')
+      .send({ review_cross_model: 'yes' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/review_cross_model must be 'true' or 'false'/);
+    expect(appSettingsDb.setValue).not.toHaveBeenCalled();
+  });
 });
