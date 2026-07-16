@@ -416,6 +416,37 @@ function Settings({
           </div>
         </div>
 
+        {appSettingsError && (
+          <div className="text-sm text-red-600 dark:text-red-400">
+            {appSettingsError}
+          </div>
+        )}
+        {appSettingsStatus === 'success' && (
+          <div className="text-sm text-green-600 dark:text-green-400">
+            Saved.
+          </div>
+        )}
+
+        <div className="flex justify-end">
+          <Button
+            onClick={handleSaveAppSettings}
+            disabled={!isAdmin || isSavingAppSettings || !appSettingsDirty}
+            className="h-10"
+          >
+            {isSavingAppSettings ? 'Saving...' : 'Save branding'}
+          </Button>
+        </div>
+      </div>
+    </div>
+
+    {/* Review (instance-wide) */}
+    <div className="space-y-4">
+      <h3 className="text-lg font-semibold text-foreground">Review</h3>
+      <p className="text-sm text-muted-foreground">
+        Instance-wide review behavior. {isAdmin ? null : 'Admin access required to edit.'}
+      </p>
+
+      <div className="bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-4">
         <div className="space-y-2">
           <label htmlFor="review-cross-model" className="flex items-start gap-2 cursor-pointer">
             <input
@@ -439,24 +470,13 @@ function Settings({
           </label>
         </div>
 
-        {appSettingsError && (
-          <div className="text-sm text-red-600 dark:text-red-400">
-            {appSettingsError}
-          </div>
-        )}
-        {appSettingsStatus === 'success' && (
-          <div className="text-sm text-green-600 dark:text-green-400">
-            Saved.
-          </div>
-        )}
-
         <div className="flex justify-end">
           <Button
             onClick={handleSaveAppSettings}
             disabled={!isAdmin || isSavingAppSettings || !appSettingsDirty}
             className="h-10"
           >
-            {isSavingAppSettings ? 'Saving...' : 'Save branding'}
+            {isSavingAppSettings ? 'Saving...' : 'Save review settings'}
           </Button>
         </div>
       </div>
