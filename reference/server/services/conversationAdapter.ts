@@ -32,6 +32,4 @@ export {
 export { resolveAskUserQuestion } from './conversation/askUserQuestion.js';
 
 // Test-only re-exports — preserve the historical underscore aliases.
-export { injectVideoRecording as _injectVideoRecording } from './conversation/mcpReadiness.js';
-export { handleVideoRecording as _handleVideoRecording } from './conversation/media.js';
 export { resolveSlashCommand as _resolveSlashCommand } from './conversation/slashCommands.js';

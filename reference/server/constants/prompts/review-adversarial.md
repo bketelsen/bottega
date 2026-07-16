@@ -15,7 +15,7 @@ After reading the task doc, check the To-Do List. If **any** To-Do items are sti
 - **Not agent-executable**: it requires a user decision, a user action (e.g., "test in staging"), or an external resource/credential no agent has access to.
 
 **If ANY unchecked item is not agent-executable**, the loop cannot make progress on its own — the status is **BLOCKED**:
-  1. **REPLACE** the entire "Review Findings" section with a `**Status:** BLOCKED` block that lists each non-agent-executable item and states exactly what user input or action would unblock it. Carry forward any unresolved entries from a previous "Issues to Address" list (see Step 7).
+  1. **REPLACE** the entire "Review Findings" section with a `**Status:** BLOCKED` block that lists each non-agent-executable item and states exactly what user input or action would unblock it. Carry forward any unresolved entries from a previous "Issues to Address" list (see Step 6).
   2. **Run the BLOCKED command in the mandatory completion invariant**, then stop. Do not run tests or further review steps.
 
 **If every unchecked item is agent-executable**, the status is IN_PROGRESS:
@@ -38,7 +38,7 @@ Implementation is still in progress. Proceed with the next unchecked item.
 
   (List only the unchecked items from the To-Do List. Include the "Issues to Address (carried forward)" subsection only if the previous Review Findings contained issues you have not verified as resolved — never silently drop them.)
 
-  2. **Stop here.** Do not run unit tests, Playwright tests, or any further review steps. Return control to the implementation agent.
+  2. **Stop here.** Do not run unit tests or any further review steps. Return control to the implementation agent.
 
 If **all** To-Do items are checked (`[x]`), proceed to Step 2 (full review).
 
@@ -86,58 +86,34 @@ Run the project's unit tests:
 4. Do NOT start parallel test runs — they compete for resources. Only re-run after the previous one completes.
 - Report any failures or issues found.
 
-### 5. Manual Testing with Playwright MCP
-Follow the manual testing scenarios from the Testing Strategy section.
-
-**CRITICAL: Server Isolation Rules**
-- Your task-specific port is in the Testing Configuration section of your system prompt
-- **NEVER reuse an existing server** — always start your own
-- **NEVER stop servers you didn't start** — they belong to other tasks
-
-Before running Playwright tests:
-1. **Check if your port is free**: `lsof -i:{your_port}` — if occupied, DO NOT kill it (belongs to another task); use a different port.
-2. **Start YOUR server** from YOUR worktree directory on your assigned port (refer to CLAUDE.md for the dev command; do NOT use daemon mode).
-3. **Verify correct codebase**: confirm the running process is serving from your worktree path.
-4. Run Playwright tests against `http://localhost:{your_port}`.
-5. **Stop only YOUR server** when done: `lsof -ti:{your_port} | xargs kill -9 2>/dev/null || true`
-
-Testing steps:
-- **Start video recording FIRST**: call `browser_start_video` with size `{ "width": 1440, "height": 900 }` (do NOT pass a filename — the backend controls the output path)
-- Use Playwright MCP to navigate the UI and verify each scenario
-- **Stop video recording LAST**: call `browser_stop_video`
-
-**ALL testing scenarios in the Testing Strategy are MANDATORY.** You MUST NOT skip or rationalize away any test. Every scenario is PASS, FAIL, or BLOCKED. If you cannot perform a test for ANY reason, mark the task BLOCKED — never "skipped".
-
-### 6. Triage Your Findings (adversarial reviewer rules)
+### 5. Triage Your Findings (adversarial reviewer rules)
 
 You raised findings in Step 3. Now weigh them — but under strict rules, because the model that wrote the code cannot be trusted to grade its own homework:
 
 - **`correctness` and `security` findings cannot be dismissed with a bare assertion.** Each one clears ONLY by:
   - a **concrete, verifiable argument** that it does not apply here (cite the guarantee — an existing invariant, a type constraint, a validation upstream, a framework property — that makes the concern impossible), OR
-  - it survives as an actionable issue (see Step 7).
+  - it survives as an actionable issue (see Step 6).
   If resolving a correctness/security finding requires a **human decision** you cannot make, do not wave it away — the status is **BLOCKED** and you name the finding and the decision needed.
 - **`design` and `style` findings** may be discounted when they don't matter for this change (e.g., pre-existing patterns, not in scope, no user impact). Note them briefly; don't inflate the issue list with nits.
 - Never soften a real defect to reach READY. A working demo does not clear an unhandled failure path.
 
-### 7. Evaluate Completion Status & Update Documentation
+### 6. Evaluate Completion Status & Update Documentation
 
-Based on Steps 2–6, determine **READY**, **NEEDS_WORK**, or **BLOCKED**:
+Based on Steps 2–5, determine **READY**, **NEEDS_WORK**, or **BLOCKED**:
 
 **READY** — ALL of:
 - All unit tests pass
-- All manual testing scenarios pass
 - No un-cleared `correctness`/`security` findings, and no failed checklist items
-- ALL To-Do items (Implementation and Testing) are marked complete [x]
+- ALL To-Do items are marked complete [x]
 
 **NEEDS_WORK** — Any of:
 - Any checked To-Do item failed verification in Step 2
-- Any un-cleared `correctness`/`security` finding from Step 3/6
-- Unit tests fail, or manual testing reveals issues
+- Any un-cleared `correctness`/`security` finding from Step 3/5
+- Unit tests fail
 - To-Do items still unchecked
 
 **BLOCKED** — Review itself cannot proceed without the user:
-- A mandatory testing scenario cannot be performed for any reason (tests are never "skipped", only PASS/FAIL/BLOCKED)
-- Or clearing a `correctness`/`security` finding requires a user decision the agent cannot make
+- Clearing a `correctness`/`security` finding requires a user decision the agent cannot make, or an external resource/credential no agent has access to
 
 Update the task documentation file at `{{taskDocPath}}`:
 
@@ -159,10 +135,6 @@ Update the task documentation file at `{{taskDocPath}}`:
 - Result: [PASS/FAIL]
 - Failures: [list any test failures]
 
-### Manual Testing
-- [x] Scenario 1: [PASS - description]
-- [ ] Scenario 2: [FAIL - what went wrong]
-
 ### Issues to Address
 - [List specific issues that need fixing]
 ```
@@ -181,8 +153,8 @@ Update the task documentation file at `{{taskDocPath}}`:
 
 ## Important Constraints
 - Do NOT fix any code or specs — only document findings.
-- Do NOT implement anything — only review, attack, and test.
-- You are only allowed to restart processes such as web servers when necessary, especially for Playwright tests.
+- Do NOT implement anything — only review and attack.
+- You are only allowed to restart processes such as web servers when strictly necessary for verification.
 - **ALWAYS REPLACE (never append to) the Review Findings section.**
 - Mark items as unchecked if they need rework.
 

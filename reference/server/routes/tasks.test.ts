@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 
@@ -52,7 +52,6 @@ vi.mock('../services/documentation.js', () => ({
   listTaskInputFiles: vi.fn().mockReturnValue([]),
   saveTaskInputFile: vi.fn(),
   deleteTaskInputFile: vi.fn(),
-  getRecordingPath: vi.fn()
 }));
 
 // Mock the upload middleware
@@ -100,16 +99,12 @@ vi.mock('../services/webServerManager.js', () => ({
   switchWorktree: vi.fn()
 }));
 
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
-
 import tasksRoutes from './tasks.js';
 import { tasksDb, conversationsDb } from '../database/db.js';
 import { purgeConversationMessages } from '../services/conversationContentStore.js';
 import { hasProjectAccess, getProject } from '../services/projectService.js';
 import { getAllTasks } from '../services/taskService.js';
-import { readTaskDoc, writeTaskDoc, deleteTaskArchive, getRecordingPath } from '../services/documentation.js';
+import { readTaskDoc, writeTaskDoc, deleteTaskArchive } from '../services/documentation.js';
 import { forceCompleteRunningAgents } from '../services/agentRunner.js';
 import { ensureTaskPullRequest } from '../services/prService.js';
 import { GitHubCapabilityError } from '../services/github/capabilities.js';
@@ -944,90 +939,6 @@ describe('Tasks Routes - Phase 3', () => {
       expect(removeWorktree).not.toHaveBeenCalled();
     });
   });
-
-  describe('GET /api/tasks/:id/review-recording', () => {
-    let tempDir: string;
-    let videoPath: string;
-    let mockTaskWithProject: { id: number; project_id: number; repo_folder_path: string; subproject_path: string | null };
-
-    beforeEach(() => {
-      tempDir = mkdtempSync(join(tmpdir(), 'review-recording-test-'));
-      videoPath = join(tempDir, 'task-1.webm');
-      mockTaskWithProject = {
-        id: 1,
-        project_id: 42,
-        repo_folder_path: '/path/to/repo',
-        subproject_path: null
-      };
-      vi.mocked(tasksDb.getWithProject).mockReturnValue(mockTaskWithProject as never);
-      vi.mocked(hasProjectAccess).mockReturnValue(true);
-      // Recording lives in the central archive (mocked via getRecordingPath)
-      vi.mocked(getRecordingPath).mockReturnValue(videoPath);
-    });
-
-    afterEach(() => {
-      rmSync(tempDir, { recursive: true, force: true });
-    });
-
-    it('should return 404 when task not found', async () => {
-      vi.mocked(tasksDb.getWithProject).mockReturnValue(null as never);
-
-      const response = await request(app)
-        .get('/api/tasks/999/review-recording');
-
-      expect(response.status).toBe(404);
-    });
-
-    it('should return 404 when user has no access', async () => {
-      vi.mocked(hasProjectAccess).mockReturnValue(false);
-
-      const response = await request(app)
-        .get('/api/tasks/1/review-recording');
-
-      expect(response.status).toBe(404);
-    });
-
-    it('should return 404 when recording file does not exist', async () => {
-      const response = await request(app)
-        .get('/api/tasks/1/review-recording');
-
-      expect(response.status).toBe(404);
-      expect(response.body.error).toBe('No review recording found');
-    });
-
-    it('should return 400 for invalid task ID', async () => {
-      const response = await request(app)
-        .get('/api/tasks/abc/review-recording');
-
-      expect(response.status).toBe(400);
-    });
-
-    it('should serve video with correct content type when recording exists', async () => {
-      writeFileSync(videoPath, 'fake-video-data');
-
-      const response = await request(app)
-        .get('/api/tasks/1/review-recording');
-
-      expect(response.status).toBe(200);
-      expect(response.headers['content-type']).toBe('video/webm');
-      expect(response.headers['accept-ranges']).toBe('bytes');
-      expect(getRecordingPath).toHaveBeenCalledWith(42, 1);
-    });
-
-    it('should support range requests for video seeking', async () => {
-      const videoContent = Buffer.alloc(10000, 'x');
-      writeFileSync(videoPath, videoContent);
-
-      const response = await request(app)
-        .get('/api/tasks/1/review-recording')
-        .set('Range', 'bytes=0-999');
-
-      expect(response.status).toBe(206);
-      expect(response.headers['content-range']).toBe('bytes 0-999/10000');
-      expect(response.headers['content-type']).toBe('video/webm');
-    });
-  });
-
   describe('GET /api/tasks/:id/worktree', () => {
     it('should return worktree status', async () => {
       const mockTaskWithProject = {

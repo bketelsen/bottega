@@ -29,7 +29,6 @@
 // The 401-recycle retry path is also unused; Codex SDK auto-refreshes
 // `auth.json` on its own, so we surface SDK errors verbatim.
 
-import { promises as fs } from 'fs';
 import { conversationsDb, tasksDb } from '../../database/db.js';
 import { resolveResumeModelEffort } from '../agentModelSettings.js';
 import { getWorktreeProjectPath, worktreeExists } from '../worktree.js';
@@ -40,7 +39,7 @@ import { codexProvider } from '../providers/openai/index.js';
 import { mirrorCodexEvent } from '../providers/openai/messageMirror.js';
 import { activeSessions } from './sessionState.js';
 import { validateAndNormalizeOptions } from './sdkOptions.js';
-import { handleImages, cleanupTempFiles, handleVideoRecording } from './media.js';
+import { handleImages, cleanupTempFiles } from './media.js';
 import {
   handleStreamingStarted,
   handleStreamingComplete,
@@ -353,7 +352,6 @@ export async function startCodexConversation(
     permissionMode,
     images,
     customSystemPrompt,
-    videoConfig,
   } = normalizedOptions;
 
   // Codex turns always run on an explicit model+effort (no SDK default).
@@ -425,7 +423,6 @@ export async function startCodexConversation(
       broadcastFn,
       broadcastToTaskSubscribersFn,
       isNewSession: true,
-      videoConfig,
     };
 
     // Token usage from `turn.completed` flows through the existing
@@ -557,10 +554,6 @@ export async function startCodexConversation(
           activeSessions.delete(ctx.claudeSessionId);
         }
         await cleanupTempFiles(tempImagePaths, tempDir);
-        if (ctx.videoConfig) {
-          await handleVideoRecording(ctx.videoConfig);
-        }
-
         if (broadcastFn && outcome === 'success') {
           broadcastFn(conversationId, {
             type: 'claude-complete',
@@ -577,10 +570,6 @@ export async function startCodexConversation(
           activeSessions.delete(ctx.claudeSessionId);
         }
         await cleanupTempFiles(tempImagePaths, tempDir);
-        if (ctx.videoConfig?.tempDir) {
-          await fs.rm(ctx.videoConfig.tempDir, { recursive: true, force: true }).catch(() => {});
-        }
-
         if (!resolved) {
           clearTimeout(timeout);
           await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');

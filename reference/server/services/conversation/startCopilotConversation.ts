@@ -13,7 +13,6 @@
 // emit reasoning deltas (`supportsThinkingDelta`), which flow through as
 // `stream_delta` UnifiedMessages and are rendered by the existing path.
 
-import { promises as fs } from 'fs';
 import { conversationsDb, tasksDb } from '../../database/db.js';
 import { resolveResumeModelEffort } from '../agentModelSettings.js';
 import { getWorktreeProjectPath, worktreeExists } from '../worktree.js';
@@ -24,7 +23,7 @@ import { copilotProvider } from '../providers/copilot/index.js';
 import { mirrorCopilotEvent } from '../providers/copilot/messageMirror.js';
 import { activeSessions } from './sessionState.js';
 import { validateAndNormalizeOptions } from './sdkOptions.js';
-import { handleImages, cleanupTempFiles, handleVideoRecording } from './media.js';
+import { handleImages, cleanupTempFiles } from './media.js';
 import {
   handleStreamingStarted,
   handleStreamingComplete,
@@ -313,7 +312,6 @@ export async function startCopilotConversation(
     permissionMode,
     images,
     customSystemPrompt,
-    videoConfig,
   } = normalizedOptions;
 
   // Copilot turns always run on an explicit `copilot/<id>` model. Copilot has
@@ -383,7 +381,6 @@ export async function startCopilotConversation(
       broadcastFn,
       broadcastToTaskSubscribersFn,
       isNewSession: true,
-      videoConfig,
     };
 
     const contextUsageTracker = createContextUsageTracker({
@@ -505,10 +502,6 @@ export async function startCopilotConversation(
           activeSessions.delete(ctx.claudeSessionId);
         }
         await cleanupTempFiles(tempImagePaths, tempDir);
-        if (ctx.videoConfig) {
-          await handleVideoRecording(ctx.videoConfig);
-        }
-
         if (broadcastFn && outcome === 'success') {
           broadcastFn(conversationId, {
             type: 'claude-complete',
@@ -525,10 +518,6 @@ export async function startCopilotConversation(
           activeSessions.delete(ctx.claudeSessionId);
         }
         await cleanupTempFiles(tempImagePaths, tempDir);
-        if (ctx.videoConfig?.tempDir) {
-          await fs.rm(ctx.videoConfig.tempDir, { recursive: true, force: true }).catch(() => {});
-        }
-
         if (!resolved) {
           clearTimeout(timeout);
           await composeOnComplete(ctx)(abortController.signal.aborted ? 'aborted' : 'error');

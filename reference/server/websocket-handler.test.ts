@@ -87,10 +87,9 @@ describe('WebSocket Handler - Task-based Conversation Flow', () => {
     it('should handle empty documentation gracefully', () => {
       const contextPrompt = buildContextPrompt(projectId, taskId);
 
-      // Testing Configuration is always present with task ID and port
-      expect(contextPrompt).toContain('## Testing Configuration');
+      // Test Execution Best Practices is always present with task ID
+      expect(contextPrompt).toContain('## Test Execution Best Practices');
       expect(contextPrompt).toContain(`Task ID:** ${taskId}`);
-      expect(contextPrompt).toContain('Dev Server Port:**');
       // No Task Context section (task body is never inlined)
       expect(contextPrompt).not.toContain('## Task Context');
     });

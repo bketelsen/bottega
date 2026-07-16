@@ -44,7 +44,7 @@ Use `AskUserQuestion` for **product and UX trade-offs only** — questions whose
 - Architecture, design patterns, framework or library choices.
 - File layout, naming, where code lives.
 - Whether to use REST vs WebSocket, sync vs async, etc.
-- Testing strategy — pick a sensible approach yourself (typically a unit test for new logic plus a Playwright MCP scenario if there's UI impact). Do not ask the user to confirm tests.
+- Testing strategy — pick a sensible approach yourself (typically unit tests for new logic). Do not ask the user to confirm tests.
 - Anything the user couldn't reasonably have an opinion about.
 
 If the request is fully unambiguous from a UX standpoint (rare), explain briefly why you're skipping clarification and proceed.
@@ -60,7 +60,7 @@ Do NOT delegate file writing to a sub-agent.
 The plan must follow every section in the template at @{{planTemplatePath}}, in the same order, with no sections removed. Add new sections only if the work genuinely requires them. In particular:
 - The `## Original Request` section must quote, verbatim, the pre-existing content of `{{taskDocPath}}` as you read it before this step (plus the task title if the doc was empty). Read the file BEFORE writing — once you Write, the original content is gone.
 - The Overview must surface the **key technical decisions** you made silently (the user can't review them, so list them so future-you and reviewers can audit them).
-- The Testing Strategy must be the strategy you chose (unit tests / Playwright MCP / why not E2E if not needed). Do not leave it blank or punt it to the user.
+- The Testing Strategy must be the strategy you chose (unit tests / why not E2E if not needed). Do not leave it blank or punt it to the user.
 - The Project Docs Update section may say "Not needed for this change." for minor features, but the section must still be present.
 
 #### CRITICAL: Agent-Executable Steps Only

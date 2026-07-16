@@ -37,8 +37,8 @@ summarize, or omit any part of it. This section is mandatory.
 ### Unit tests
 - {{ spec/test files and what each one covers }}
 
-### Manual / Playwright MCP testing
-- {{ scenarios with steps and expected results, or an explicit "not needed because …" }}
+### Other verification
+- {{ non-UI checks where applicable (curl an endpoint, inspect DB/state, rendered-HTML check), or an explicit "not needed because …" }}
 
 ## To-Do List
 
@@ -48,7 +48,6 @@ summarize, or omit any part of it. This section is mandatory.
 
 ### Testing
 - [ ] {{ unit tests }}
-- [ ] {{ manual testing }}
 
 ## Project Docs Update
 

@@ -103,13 +103,6 @@ vi.mock('./ConversationList', () => ({
   ),
 }));
 
-vi.mock('./ReviewRecording', () => ({
-  default: ({ taskId, className }: { taskId: number; className?: string }) => (
-    <div data-testid="review-recording" data-task-id={taskId} className={className}>
-      ReviewRecording
-    </div>
-  ),
-}));
 
 // Mock the API client. Defaults return non-ok responses so the worktree / web
 // server / PR fetches that fire on mount leave their state null — matching the
@@ -547,14 +540,6 @@ describe('TaskDetailView Component', () => {
 
       const toggleButton = screen.getByTestId('icon-check-circle-2').closest('button')!;
       expect(toggleButton.className).toContain('bg-green');
-    });
-
-    it('should render ReviewRecording with correct taskId', () => {
-      render(<TaskDetailView {...defaultProps} />);
-
-      const reviewRecording = screen.getByTestId('review-recording');
-      expect(reviewRecording).toBeInTheDocument();
-      expect(reviewRecording).toHaveAttribute('data-task-id', 't1');
     });
 
     it('should apply gray styling when workflow_complete is 0', () => {

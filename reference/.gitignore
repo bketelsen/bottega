@@ -130,8 +130,6 @@ dev-debug.log
 # OS specific
 
 /test-results
-/playwright-report
-.playwright-mcp/
 
 # Personal, machine-specific Claude instructions (dev-box URLs, deploy layout,
 # manual-test fixtures, auth tokens). Loads alongside CLAUDE.md but is never

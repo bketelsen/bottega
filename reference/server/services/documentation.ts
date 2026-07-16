@@ -3,14 +3,13 @@ import os from 'os';
 import path from 'path';
 
 const TASKS_FOLDER = 'tasks';
-const RECORDINGS_FOLDER = 'recordings';
 const INPUT_FILES_FOLDER = 'input_files';
 const TMP_FOLDER = 'tmp';
 
 /**
- * Root of the central per-user archive for task documentation, attachments,
- * and recordings. These files live outside the project repo so they survive
- * worktree destruction on task merge.
+ * Root of the central per-user archive for task documentation and attachments.
+ * These files live outside the project repo so they survive worktree
+ * destruction on task merge.
  *
  * Override with BOTTEGA_ARCHIVE_ROOT in tests.
  */
@@ -26,20 +25,12 @@ function getArchiveTasksFolderPath(projectId: number): string {
   return path.join(getProjectArchivePath(projectId), TASKS_FOLDER);
 }
 
-function getArchiveRecordingsFolderPath(projectId: number): string {
-  return path.join(getProjectArchivePath(projectId), RECORDINGS_FOLDER);
-}
-
 export function getTaskDocPath(projectId: number, taskId: number): string {
   return path.join(getArchiveTasksFolderPath(projectId), `task-${taskId}.md`);
 }
 
 export function getTaskInputFilesPath(projectId: number, taskId: number): string {
   return path.join(getArchiveTasksFolderPath(projectId), `task-${taskId}`, INPUT_FILES_FOLDER);
-}
-
-export function getRecordingPath(projectId: number, taskId: number): string {
-  return path.join(getArchiveRecordingsFolderPath(projectId), `task-${taskId}.webm`);
 }
 
 function getTmpFolderPath(repoPath: string): string {
@@ -234,11 +225,6 @@ export function deleteTaskArchive(projectId: number, taskId: number): void {
     if (fs.existsSync(taskFolder)) {
       fs.rmSync(taskFolder, { recursive: true, force: true });
     }
-
-    const recordingPath = getRecordingPath(projectId, taskId);
-    if (fs.existsSync(recordingPath)) {
-      fs.unlinkSync(recordingPath);
-    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Failed to delete task archive: ${message}`);
@@ -330,20 +316,10 @@ export function deleteTaskInputFile(
 }
 
 /**
- * Calculate the dev server port for a task
- * Uses convention: 3100 + (task_id % 900) to get ports in range 3100-3999
- */
-export function getDevServerPort(taskId: number): number {
-  return 3100 + (taskId % 900);
-}
-
-/**
  * Build a context prompt from task documentation and input files.
  * Task doc + input files live in the central archive (per-user).
  */
 export function buildContextPrompt(projectId: number, taskId: number): string {
-  const devServerPort = getDevServerPort(taskId);
-
   const sections: string[] = [];
 
   const taskDocPath = getTaskDocPath(projectId, taskId);
@@ -367,18 +343,9 @@ Note: any \`.bottega/tasks/*.md\` files inside the repo itself are legacy from b
     );
   }
 
-  sections.push(`## Testing Configuration
+  sections.push(`## Test Execution Best Practices
 
 - **Task ID:** ${taskId}
-- **Dev Server Port:** ${devServerPort}
-
-When running Playwright MCP tests, start the project's dev server on port ${devServerPort}:
-1. Check project files (README, package.json, Procfile) for the start command
-2. Start server with your assigned port (e.g., \`PORT=${devServerPort} bin/dev\` or \`npm run dev -- --port ${devServerPort}\`)
-3. Run Playwright tests against \`http://localhost:${devServerPort}\`
-4. Stop the server when testing is complete: \`lsof -ti:${devServerPort} | xargs kill -9 2>/dev/null || true\`
-
-### Test Execution Best Practices
 
 When running the project's test suite:
 
@@ -398,5 +365,4 @@ export const _internal = {
   getArchiveRoot,
   getProjectArchivePath,
   getArchiveTasksFolderPath,
-  getArchiveRecordingsFolderPath,
 };

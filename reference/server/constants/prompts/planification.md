@@ -37,7 +37,6 @@ Based on the sub-agent's findings:
 
 2. ALWAYS propose a testing strategy and confirm with the user:
    - Unit tests (which files/scenarios)
-   - Manual Playwright MCP testing scenarios (if the feature has UI impact)
    - Explicitly state if integration/E2E tests are NOT needed and why
 
 3. If everything is truly 100% clear (rare), explain WHY you're skipping clarification before proceeding.
