@@ -41,7 +41,6 @@ vi.mock('./notifications.js', () => ({
 vi.mock('./documentation.js', () => ({
   buildContextPrompt: vi.fn().mockReturnValue('test context prompt'),
   getTaskDocPath: vi.fn((projectId, taskId) => `/archive/projects/${projectId}/tasks/task-${taskId}.md`),
-  getRecordingPath: vi.fn((projectId, taskId) => `/archive/projects/${projectId}/recordings/task-${taskId}.webm`)
 }));
 
 vi.mock('../constants/agentPrompts.js', () => ({
@@ -115,7 +114,7 @@ import {
   generateReviewMessage,
   generateRefinementMessage
 } from '../constants/agentPrompts.js';
-import { getWorktreeProjectPath, worktreeExists, rebaseOnMain } from './worktree.js';
+import { worktreeExists, rebaseOnMain } from './worktree.js';
 import { loadAgentModelSettings } from './agentModelSettings.js';
 import { resolveReviewAgentSetting } from './agentModelSettings.js';
 describe('agentRunner', () => {
@@ -549,52 +548,6 @@ describe('agentRunner', () => {
       const result = await startAgentRun(1, 'implementation');
 
       expect(result.claudeSessionId).toBe('session-123');
-    });
-
-    it('should pass videoConfig for review agent', async () => {
-      await startAgentRun(1, 'review');
-
-      expect(startConversation).toHaveBeenCalledWith(
-        1,
-        'review message',
-        expect.objectContaining({
-          videoConfig: expect.objectContaining({
-            taskId: 1,
-            recordingDestPath: '/archive/projects/1/recordings/task-1.webm',
-            tempDir: expect.stringContaining('/tmp/bottega-video-1-'),
-            worktreePath: '/path/to/project'
-          })
-        })
-      );
-    });
-
-    it('should set videoConfig.worktreePath to the worktree path when a worktree exists', async () => {
-      vi.mocked(worktreeExists).mockResolvedValue(true);
-      vi.mocked(getWorktreeProjectPath).mockReturnValue('/path/to/project-worktrees/task-1');
-
-      await startAgentRun(1, 'review');
-
-      expect(startConversation).toHaveBeenCalledWith(
-        1,
-        'review message',
-        expect.objectContaining({
-          videoConfig: expect.objectContaining({
-            worktreePath: '/path/to/project-worktrees/task-1'
-          })
-        })
-      );
-    });
-
-    it('should not pass videoConfig for non-review agents', async () => {
-      await startAgentRun(1, 'implementation');
-
-      expect(startConversation).toHaveBeenCalledWith(
-        1,
-        'implementation message',
-        expect.objectContaining({
-          videoConfig: null
-        })
-      );
     });
 
     it('rebases the branch onto main before starting the PR agent', async () => {

@@ -16,13 +16,6 @@ export interface ConversationImage {
   mimeType: string;
 }
 
-export interface VideoConfig {
-  tempDir?: string | undefined;
-  taskId?: number | undefined;
-  recordingDestPath?: string | undefined;
-  worktreePath?: string | undefined;
-}
-
 export interface AskUserQuestionToolResult {
   tool_use_id: string;
   content: unknown;
@@ -53,7 +46,6 @@ export interface ConversationOptions {
   effort?: string | null | undefined;
   disallowedTools?: string[] | undefined;
   askUserQuestionToolResult?: AskUserQuestionToolResult | undefined;
-  videoConfig?: VideoConfig | null | undefined;
   /**
    * Internal: set when this call is the automatic single retry after a 401
    * subprocess-auth failure (see `retryOn401.ts`). External callers must not
@@ -71,7 +63,6 @@ export interface StreamingContext {
   broadcastToTaskSubscribersFn?: BroadcastToTaskSubscribersFn | undefined;
   isNewSession: boolean;
   broadcastClaudeStatus?: boolean | undefined;
-  videoConfig?: VideoConfig | null | undefined;
 }
 
 export interface LifecycleHooks {

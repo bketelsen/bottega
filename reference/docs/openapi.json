@@ -145,7 +145,6 @@
       "post": { "tags": ["tasks"], "summary": "Create / update PR", "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "title": { "type": "string" }, "body": { "type": "string" } }, "required": ["title"] } } } }, "responses": { "200": { "$ref": "#/components/responses/Json" } } }
     },
     "/api/tasks/{id}/merge-cleanup": { "post": { "tags": ["tasks"], "summary": "Merge PR and clean up worktree", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "$ref": "#/components/responses/Json" } } } },
-    "/api/tasks/{id}/review-recording": { "get": { "tags": ["tasks"], "summary": "Get agent review audio", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "description": "Audio stream" } } } },
 
     "/api/tasks/{taskId}/conversations": {
       "parameters": [{ "name": "taskId", "in": "path", "required": true, "schema": { "type": "integer" } }],

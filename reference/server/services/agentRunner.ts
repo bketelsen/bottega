@@ -11,8 +11,8 @@
 import { tasksDb, agentRunsDb, conversationsDb, projectsDb, userDb, appSettingsDb } from '../database/db.js';
 import { startConversation } from './conversationAdapter.js';
 import { updateUserBadge } from './notifications.js';
-import { buildContextPrompt, getTaskDocPath, getRecordingPath } from './documentation.js';
-import { getWorktreeProjectPath, worktreeExists, getPullRequestStatus, rebaseOnMain } from './worktree.js';
+import { buildContextPrompt, getTaskDocPath } from './documentation.js';
+import { getPullRequestStatus, rebaseOnMain } from './worktree.js';
 import { getCredentialStore } from './credentials/registry.js';
 import { ProviderCredentialsMissingError } from './credentials/types.js';
 import type { AgentModelSetting } from '../../shared/types/agentModelSettings.js';
@@ -33,7 +33,6 @@ import type {
   BroadcastFn,
   BroadcastToTaskSubscribersFn,
 } from '@shared/websocket/messages';
-import type { VideoConfig } from './conversation/types.js';
 import { assertCapability } from './github/capabilities.js';
 
 export interface StartAgentRunOptions {
@@ -114,11 +113,6 @@ export async function startAgentRun(
   }
   const effectiveUserId = userId ?? taskWithProject.user_id ?? undefined;
 
-  // Get effective path (worktree if exists, otherwise main repo)
-  let effectivePath = taskWithProject.repo_folder_path;
-  if (await worktreeExists(effectivePath, taskId)) {
-    effectivePath = getWorktreeProjectPath(effectivePath, taskId, taskWithProject.subproject_path);
-  }
   // Task doc lives in the central archive, not the worktree — survives PR merge
   const taskDocPath = getTaskDocPath(taskWithProject.project_id, taskId);
 
@@ -257,23 +251,6 @@ export async function startAgentRun(
     );
   }
 
-  // Create video recording config for review agents (Playwright MCP video capture).
-  // Per docs/opencode/00-context-decisions.md § R1: OpenCode runs review
-  // agents in degraded mode — no Playwright MCP, no recording temp dir.
-  let videoConfig: VideoConfig | null = null;
-  if (agentType === 'review' && provider !== 'opencode') {
-    const tempDir = `/tmp/bottega-video-${taskId}-${Date.now()}`;
-    videoConfig = {
-      tempDir,
-      taskId,
-      recordingDestPath: getRecordingPath(taskWithProject.project_id, taskId),
-      // Fallback scan location: if Playwright MCP's `browser_start_video` is called with a
-      // `filename` arg, it resolves against cwd (the worktree) rather than --output-dir.
-      // See playwright-core/lib/tools/backend/response.js:60 and context.js:263.
-      worktreePath: effectivePath,
-    };
-  }
-
   // The partial unique index makes this insert the authoritative reservation.
   // Pre-insert checks in callers are only an optimization.
   let agentRun: AgentRunRow;
@@ -360,7 +337,6 @@ export async function startAgentRun(
       model,
       ...(effort !== null ? { effort } : {}),
       disallowedTools,
-      videoConfig: videoConfig,
     });
 
     return { agentRun, conversation, claudeSessionId };

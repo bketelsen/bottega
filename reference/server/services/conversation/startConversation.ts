@@ -4,7 +4,6 @@
 // `composeAsync`.
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { promises as fs } from 'fs';
 import { conversationsDb, tasksDb } from '../../database/db.js';
 import { resolveResumeModelEffort } from '../agentModelSettings.js';
 import { getWorktreeProjectPath, worktreeExists } from '../worktree.js';
@@ -12,14 +11,14 @@ import { generateConversationTitle } from '../titleGenerator.js';
 import { auditClaudeLaunch, buildClaudeSdkEnv, getQueryProcessPid } from '../claudeCredentials.js';
 import { createContextUsageTracker } from '../contextUsageTracker.js';
 import { resolveSlashCommand } from './slashCommands.js';
-import { handleVideoRecording, handleImages, cleanupTempFiles } from './media.js';
+import { handleImages, cleanupTempFiles } from './media.js';
 import { ThinkingAccumulator, patchThinking } from './thinkingPatcher.js';
 import {
   validateAndNormalizeOptions,
   mapOptionsToSDK,
   loadMcpConfig,
 } from './sdkOptions.js';
-import { injectVideoRecording, waitForMcpServers } from './mcpReadiness.js';
+import { waitForMcpServers } from './mcpReadiness.js';
 import { activeSessions } from './sessionState.js';
 import { buildCanUseTool, rejectPendingAskUserQuestion } from './askUserQuestion.js';
 import {
@@ -85,7 +84,6 @@ export async function startConversation(
     permissionMode,
     images,
     customSystemPrompt,
-    videoConfig,
   } = normalizedOptions;
 
   // Every conversation runs on an explicit model — resolved from the chosen
@@ -135,10 +133,7 @@ export async function startConversation(
     canUseTool: buildCanUseTool({ conversationId, broadcastFn }),
   });
 
-  let mcpServers = await loadMcpConfig(projectPath);
-  if (mcpServers && videoConfig) {
-    mcpServers = (injectVideoRecording(mcpServers as never, videoConfig) ?? null);
-  }
+  const mcpServers = await loadMcpConfig(projectPath);
   if (mcpServers) {
     sdkOptions.mcpServers = mcpServers;
   }
@@ -196,7 +191,6 @@ export async function startConversation(
       broadcastFn,
       broadcastToTaskSubscribersFn,
       isNewSession: true,
-      videoConfig,
     };
     const contextUsageTracker = createContextUsageTracker({
       conversationId: conversationId,
@@ -305,10 +299,6 @@ export async function startConversation(
         await cleanupTempFiles(tempImagePaths, tempDir);
         await patchThinking(ctx.claudeSessionId, projectPath, userId, thinkingAcc);
 
-        if (ctx.videoConfig) {
-          await handleVideoRecording(ctx.videoConfig);
-        }
-
         if (broadcastFn && outcome === 'success') {
           broadcastFn(conversationId, {
             type: 'claude-complete',
@@ -326,10 +316,6 @@ export async function startConversation(
           activeSessions.delete(ctx.claudeSessionId);
         }
         await cleanupTempFiles(tempImagePaths, tempDir);
-
-        if (ctx.videoConfig?.tempDir) {
-          await fs.rm(ctx.videoConfig.tempDir, { recursive: true, force: true }).catch(() => {});
-        }
 
         if (!ctx.claudeSessionId) {
           clearTimeout(timeout);

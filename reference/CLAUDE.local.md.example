@@ -40,10 +40,10 @@ Bottega goes here instead.
   (so you don't pollute real projects — creating a task also creates a git
   worktree and branch on the target repo).
 
-## Auth token for Playwright / MCP testing
+## Auth token for local UI testing
 
 - `AUTH_TOKEN` in `.env` is a per-user API key. Note which user it resolves to.
-- Seed it into the MCP browser's localStorage to skip the login form:
+- Seed it into the browser's localStorage to skip the login form:
   ```js
   localStorage.setItem('auth-token', '<AUTH_TOKEN value from .env>');
   ```

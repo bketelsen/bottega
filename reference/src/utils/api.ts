@@ -514,9 +514,6 @@ export const api = {
         body: JSON.stringify(body),
       });
     },
-    // Review recording — HEAD-only check; the body is the binary stream.
-    checkReviewRecording: (taskId: number): TypedFetch<unknown> =>
-      authenticatedFetch<unknown>(`/api/tasks/${taskId}/review-recording`, { method: 'HEAD' }),
     // Task attachments
     listAttachments: (taskId: number): TypedFetch<ListTaskAttachmentsResponse> =>
       authenticatedFetch<ListTaskAttachmentsResponse>(`/api/tasks/${taskId}/attachments`),

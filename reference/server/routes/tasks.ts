@@ -1,6 +1,4 @@
 import express, { type Request, type Response } from 'express';
-import { promises as fs } from 'fs';
-import fsSync from 'fs';
 import { tasksDb, conversationsDb } from '../database/db.js';
 import { purgeConversationMessages } from '../services/conversationContentStore.js';
 import { hasProjectAccess, getProject } from '../services/projectService.js';
@@ -12,7 +10,6 @@ import {
   listTaskInputFiles,
   saveTaskInputFile,
   deleteTaskInputFile,
-  getRecordingPath,
 } from '../services/documentation.js';
 import { upload } from '../middleware/upload.js';
 import { notifyTaskStatusChange } from '../services/notifications.js';
@@ -677,72 +674,6 @@ router.post(
     } catch (error) {
       console.error('Error resuming workflow:', error);
       res.status(500).json({ error: 'Failed to resume workflow' } satisfies ApiError);
-    }
-  },
-);
-
-router.get(
-  '/tasks/:id/review-recording',
-  validateParams(IdParamsSchema),
-  async (req: Request, res: Response<unknown>) => {
-    try {
-      const userId = req.user!.id;
-      const { id: taskId } = req.validated!.params as IdParams;
-
-      const taskWithProject = tasksDb.getWithProject(taskId);
-
-      if (!taskWithProject) {
-        return res.status(404).json({ error: 'Task not found' } satisfies ApiError);
-      }
-
-      if (!hasProjectAccess(taskWithProject.project_id, userId)) {
-        return res.status(404).json({ error: 'Task not found' } satisfies ApiError);
-      }
-
-      const videoPath = getRecordingPath(taskWithProject.project_id, taskId);
-
-      try {
-        await fs.access(videoPath);
-      } catch {
-        return res
-          .status(404)
-          .json({ error: 'No review recording found' } satisfies ApiError);
-      }
-
-      const stat = await fs.stat(videoPath);
-      const fileSize = stat.size;
-
-      const range = req.headers.range;
-      if (range) {
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0] ?? '0', 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-        const chunkSize = end - start + 1;
-
-        res.writeHead(206, {
-          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-          'Accept-Ranges': 'bytes',
-          'Content-Length': chunkSize,
-          'Content-Type': 'video/webm',
-        });
-
-        const stream = fsSync.createReadStream(videoPath, { start, end });
-        stream.pipe(res);
-      } else {
-        res.writeHead(200, {
-          'Content-Length': fileSize,
-          'Content-Type': 'video/webm',
-          'Accept-Ranges': 'bytes',
-        });
-
-        const stream = fsSync.createReadStream(videoPath);
-        stream.pipe(res);
-      }
-    } catch (error) {
-      console.error('Error serving review recording:', error);
-      res
-        .status(500)
-        .json({ error: 'Failed to serve review recording' } satisfies ApiError);
     }
   },
 );

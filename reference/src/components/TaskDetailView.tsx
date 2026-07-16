@@ -15,7 +15,6 @@ import Breadcrumb from './Breadcrumb';
 import MarkdownEditor from './MarkdownEditor';
 import ConversationList from './ConversationList';
 import AgentSection from './AgentSection';
-import ReviewRecording from './ReviewRecording';
 import { cn } from '../lib/utils';
 import { api } from '../utils/api';
 import { cleanupWorktreeOnComplete } from '../utils/worktreeCleanup';
@@ -1014,7 +1013,6 @@ function TaskDetailView({
             yoloMode={task.yolo_mode === 1}
             className="flex-shrink-0"
           />
-          <ReviewRecording taskId={task.id} className="flex-shrink-0" />
         </div>
       </div>
 

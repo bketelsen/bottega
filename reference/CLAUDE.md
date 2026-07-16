@@ -165,12 +165,13 @@ pnpm test:run          # single run
 pnpm test:coverage     # with coverage report
 ```
 
-There is no Playwright e2e suite — UI flows are validated manually via the
-Playwright MCP server and protected by the unit/integration suite (`pnpm test:run`).
+There is no browser-based e2e suite — the app is protected by the
+unit/integration suite (`pnpm test:run`). Verify UI work by running the dev
+server and exercising it directly (see below).
 
-## Manual Testing with Playwright MCP
+## Manual UI verification
 
-Use the Playwright MCP server to validate UI work after implementing features.
+To sanity-check UI work, run the dev server and drive it yourself.
 
 **Authentication.** Two ways to authenticate as a real user:
 1. **JWT** — `POST /api/auth/login` with `{ username, password }` returns a
@@ -180,34 +181,18 @@ Use the Playwright MCP server to validate UI work after implementing features.
    only `sha256(key)` is stored). Send as `Authorization: Bearer ccui_<…>`. Every
    API caller has a real identity — there is no global shared key.
 
-For MCP-driven UI testing, seed a token into localStorage before navigating, then
-`browser_navigate` to `http://localhost:5173/` and the Dashboard loads
-authenticated:
-```js
-// in mcp__playwright__browser_evaluate, once per session:
-localStorage.setItem('auth-token', '<your JWT or API key>');
-```
+To load the app authenticated, seed a token into `localStorage` (key
+`auth-token`) before navigating to `http://localhost:5173/`.
 
 **App structure (4-screen flow):** Dashboard (project cards) → Board View
 (Pending / In Progress / Completed Kanban) → Task Detail (docs + conversation
 list) → Chat Interface.
 
-**Don't mistake "Loading…" for an error.** The first `browser_snapshot` after
-`browser_navigate` often shows `"Loading..."` plus WebSocket warnings — that's
-normal startup while the app establishes its WebSocket and fetches data. Wait a
-few seconds and snapshot again.
+**Don't mistake "Loading…" for an error.** The first render after navigation
+often shows `"Loading..."` plus WebSocket warnings — that's normal startup while
+the app establishes its WebSocket and fetches data. Wait a few seconds.
 
 **Forcing a long-running conversation** (for mid-stream reload / streaming /
 abort / reconnect tests), prompt: *"Run a bash loop from 1 to 60. At each
 iteration, print the current number, then sleep 1 second. Use the Bash tool."* —
 ~60s of predictable streaming output that's trivial to inspect mid-turn.
-
-| Playwright MCP command | Purpose |
-|---------|---------|
-| `browser_navigate` | Go to a URL |
-| `browser_snapshot` | Capture page state (returns element refs) |
-| `browser_click` | Click an element by ref |
-| `browser_type` | Type text into an input |
-| `browser_press_key` | Press a keyboard key |
-| `browser_wait_for` | Wait for text/time |
-| `browser_console_messages` | Check for errors |

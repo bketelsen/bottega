@@ -1,7 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { promises as fsp } from 'fs';
-import os from 'os';
-import path from 'path';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock all dependencies before importing the module under test
 vi.mock('@anthropic-ai/claude-agent-sdk', () => {
@@ -153,8 +150,6 @@ import {
   getActiveStreamingByConversation,
   getAllActiveStreamingSessions,
   resolveAskUserQuestion,
-  _injectVideoRecording,
-  _handleVideoRecording,
   _resolveSlashCommand
 } from './conversationAdapter.js';
 import { isClaudeAuthError, AUTH_RETRY_BACKOFF_MS } from './conversation/retryOn401.js';
@@ -1684,152 +1679,6 @@ it('should broadcast streaming-ended event when streaming completes', async () =
   // Note: MCP configuration loading and image handling tests are omitted
   // because they require fs mocking which is complex with ES modules.
   // These features are covered by integration/e2e tests.
-
-  describe('injectVideoRecording', () => {
-    it('should inject devtools capability and output dir into playwright MCP server args', () => {
-      const mcpServers = {
-        playwright: {
-          command: 'npx',
-          args: ['-y', '@playwright/mcp@latest']
-        },
-        other: {
-          command: 'node',
-          args: ['other-server.js']
-        }
-      };
-
-      const result = _injectVideoRecording(mcpServers, { tempDir: '/tmp/video-test' });
-
-      expect(result!.playwright!.args).toContain('-y');
-      expect(result!.playwright!.args).toContain('@playwright/mcp@latest');
-      expect(result!.playwright!.args).toContain('--caps=devtools');
-      expect(result!.playwright!.args).toContain('--viewport-size=1440x900');
-      expect(result!.playwright!.args).toContain('--output-dir=/tmp/video-test');
-      // Other server should not be modified
-      expect(result!.other!.args).toEqual(['other-server.js']);
-    });
-
-    it('should return original config when no playwright server found', () => {
-      const mcpServers = {
-        other: {
-          command: 'node',
-          args: ['other-server.js']
-        }
-      };
-
-      const result = _injectVideoRecording(mcpServers, { tempDir: '/tmp/video-test' });
-
-      expect(result!.other!.args).toEqual(['other-server.js']);
-    });
-
-    it('should return original config when videoConfig is null', () => {
-      const mcpServers = {
-        playwright: {
-          command: 'npx',
-          args: ['-y', '@playwright/mcp']
-        }
-      };
-
-      const result = _injectVideoRecording(mcpServers, null);
-
-      expect(result).toBe(mcpServers);
-    });
-
-    it('should return original config when mcpServers is null', () => {
-      const result = _injectVideoRecording(null, { tempDir: '/tmp/test' });
-
-      expect(result).toBeNull();
-    });
-
-    it('should not modify the original config object', () => {
-      const mcpServers = {
-        playwright: {
-          command: 'npx',
-          args: ['-y', '@playwright/mcp']
-        }
-      };
-
-      _injectVideoRecording(mcpServers, { tempDir: '/tmp/video-test' });
-
-      // Original should be unchanged
-      expect(mcpServers.playwright.args).toEqual(['-y', '@playwright/mcp']);
-    });
-  });
-
-  describe('handleVideoRecording', () => {
-    let sandbox: string;
-    let tempDir: string;
-    let worktreePath: string;
-    let archiveDir: string;
-    let recordingDestPath: string;
-
-    beforeEach(async () => {
-      sandbox = await fsp.mkdtemp(path.join(os.tmpdir(), 'handle-video-test-'));
-      tempDir = path.join(sandbox, 'tempDir');
-      worktreePath = path.join(sandbox, 'worktree');
-      archiveDir = path.join(sandbox, 'archive', 'recordings');
-      recordingDestPath = path.join(archiveDir, 'task-1.webm');
-      await fsp.mkdir(tempDir, { recursive: true });
-      await fsp.mkdir(worktreePath, { recursive: true });
-    });
-
-    afterEach(async () => {
-      await fsp.rm(sandbox, { recursive: true, force: true }).catch(() => {});
-    });
-
-    it('prefers the .webm in tempDir when present', async () => {
-      const tempVideo = path.join(tempDir, 'video-1.webm');
-      const orphanVideo = path.join(worktreePath, 'review-recording.webm');
-      await fsp.writeFile(tempVideo, 'bigger-payload-in-tempdir');
-      await fsp.writeFile(orphanVideo, 'x');
-
-      await _handleVideoRecording({ tempDir, taskId: 1, recordingDestPath, worktreePath });
-
-      // Archive file exists
-      const stat = await fsp.stat(recordingDestPath);
-      expect(stat.isFile()).toBe(true);
-      // Orphan in worktree is NOT touched when tempDir had files
-      expect((await fsp.stat(orphanVideo)).isFile()).toBe(true);
-      // tempDir cleaned up
-      await expect(fsp.access(tempDir)).rejects.toBeTruthy();
-    });
-
-    it('recovers orphan from worktree when tempDir is empty', async () => {
-      const orphanVideo = path.join(worktreePath, 'review-recording.webm');
-      await fsp.writeFile(orphanVideo, 'orphan-payload');
-
-      await _handleVideoRecording({ tempDir, taskId: 1, recordingDestPath, worktreePath });
-
-      // Archive file exists with recovered content
-      const archived = await fsp.readFile(recordingDestPath, 'utf-8');
-      expect(archived).toBe('orphan-payload');
-      // Orphan is cleaned up from the worktree
-      await expect(fsp.access(orphanVideo)).rejects.toBeTruthy();
-      // tempDir cleaned up
-      await expect(fsp.access(tempDir)).rejects.toBeTruthy();
-    });
-
-    it('does nothing when both tempDir and worktree have no .webm', async () => {
-      await _handleVideoRecording({ tempDir, taskId: 1, recordingDestPath, worktreePath });
-
-      // No archive file written
-      await expect(fsp.access(recordingDestPath)).rejects.toBeTruthy();
-      // tempDir cleaned up
-      await expect(fsp.access(tempDir)).rejects.toBeTruthy();
-    });
-
-    it('does not scan worktree when worktreePath is absent', async () => {
-      const orphanVideo = path.join(worktreePath, 'review-recording.webm');
-      await fsp.writeFile(orphanVideo, 'orphan-payload');
-
-      await _handleVideoRecording({ tempDir, taskId: 1, recordingDestPath });
-
-      // Archive file NOT written (no worktreePath means no fallback)
-      await expect(fsp.access(recordingDestPath)).rejects.toBeTruthy();
-      // Orphan in worktree is untouched
-      expect((await fsp.stat(orphanVideo)).isFile()).toBe(true);
-    });
-  });
 
   describe('agent chaining', () => {
     beforeEach(() => {

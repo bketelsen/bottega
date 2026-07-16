@@ -9,9 +9,7 @@ import {
   deleteTaskArchive,
   getTaskDocPath,
   getTaskInputFilesPath,
-  getRecordingPath,
   buildContextPrompt,
-  getDevServerPort,
   ensureTmpFolder,
   saveConversationUpload,
   updateGeneratedTaskDocSection,
@@ -52,11 +50,6 @@ describe('Documentation Service - Phase 2', () => {
     it('should return correct task input_files path in the central archive', () => {
       const result = getTaskInputFilesPath(17, 42);
       expect(result).toBe(path.join(archiveRoot, 'projects', '17', 'tasks', 'task-42', 'input_files'));
-    });
-
-    it('should return correct recording path in the central archive', () => {
-      const result = getRecordingPath(17, 42);
-      expect(result).toBe(path.join(archiveRoot, 'projects', '17', 'recordings', 'task-42.webm'));
     });
 
   });
@@ -186,20 +179,16 @@ describe('Documentation Service - Phase 2', () => {
   });
 
   describe('deleteTaskArchive', () => {
-    it('should delete the task doc, input_files folder, and recording', () => {
+    it('should delete the task doc and input_files folder', () => {
       writeTaskDoc(testProjectId, 7, 'doc');
       const inputFilesPath = getTaskInputFilesPath(testProjectId, 7);
       fs.mkdirSync(inputFilesPath, { recursive: true });
       fs.writeFileSync(path.join(inputFilesPath, 'a.txt'), 'x');
-      const recordingPath = getRecordingPath(testProjectId, 7);
-      fs.mkdirSync(path.dirname(recordingPath), { recursive: true });
-      fs.writeFileSync(recordingPath, 'video-bytes');
 
       deleteTaskArchive(testProjectId, 7);
 
       expect(fs.existsSync(archiveTaskPath(7))).toBe(false);
       expect(fs.existsSync(path.dirname(inputFilesPath))).toBe(false);
-      expect(fs.existsSync(recordingPath)).toBe(false);
     });
 
     it('should not throw when nothing exists for the task', () => {
@@ -208,12 +197,11 @@ describe('Documentation Service - Phase 2', () => {
   });
 
   describe('buildContextPrompt', () => {
-    it('should include Testing Configuration even when no task doc exists', () => {
+    it('should include Test Execution Best Practices even when no task doc exists', () => {
       const result = buildContextPrompt(testProjectId, 1);
 
-      expect(result).toContain('## Testing Configuration');
+      expect(result).toContain('## Test Execution Best Practices');
       expect(result).toContain('Task ID:** 1');
-      expect(result).toContain('Dev Server Port:** 3101'); // 3100 + (1 % 900)
       // Task body is never inlined
       expect(result).not.toContain('## Task Context');
     });
@@ -260,30 +248,6 @@ describe('Documentation Service - Phase 2', () => {
       expect(result2).not.toContain(getTaskDocPath(testProjectId, 1));
     });
   });
-
-  describe('getDevServerPort', () => {
-    it('should calculate port using formula 3100 + (taskId % 900)', () => {
-      expect(getDevServerPort(1)).toBe(3101);
-      expect(getDevServerPort(15)).toBe(3115);
-      expect(getDevServerPort(42)).toBe(3142);
-      expect(getDevServerPort(100)).toBe(3200);
-    });
-
-    it('should keep ports in range 3100-3999', () => {
-      // Test edge cases
-      expect(getDevServerPort(0)).toBe(3100);
-      expect(getDevServerPort(899)).toBe(3999);
-      expect(getDevServerPort(900)).toBe(3100); // Wraps around
-      expect(getDevServerPort(901)).toBe(3101);
-      expect(getDevServerPort(1800)).toBe(3100); // Wraps around again
-    });
-
-    it('should handle large task IDs', () => {
-      expect(getDevServerPort(10000)).toBe(3100 + (10000 % 900));
-      expect(getDevServerPort(99999)).toBe(3100 + (99999 % 900));
-    });
-  });
-
 
   describe('_internal.getTmpFolderPath', () => {
     it('should return correct tmp folder path at project root', () => {

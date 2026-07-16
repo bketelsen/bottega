@@ -71,11 +71,10 @@ describe('generateYoloMessage', () => {
     expect(msg.toLowerCase()).toContain('sub-agent');
   });
 
-  it('requires a testing strategy with unit tests and optional Playwright verification', async () => {
+  it('requires a testing strategy with unit tests', async () => {
     const msg = await generateYoloMessage(taskDocPath, taskId, null);
     expect(msg).toContain('Testing Strategy');
     expect(msg.toLowerCase()).toContain('unit test');
-    expect(msg).toContain('Playwright');
   });
 
   it('uses workflow completion as its only server publication signal', async () => {
