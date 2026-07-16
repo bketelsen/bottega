@@ -462,6 +462,49 @@ function Settings({
       </div>
     </div>
 
+    {/* Review (instance-wide) */}
+    <div className="space-y-4">
+      <h3 className="text-lg font-semibold text-foreground">Review</h3>
+      <p className="text-sm text-muted-foreground">
+        Instance-wide review behavior. {isAdmin ? null : 'Admin access required to edit.'}
+      </p>
+
+      <div className="bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-4">
+        <div className="space-y-2">
+          <label htmlFor="review-cross-model" className="flex items-start gap-2 cursor-pointer">
+            <input
+              id="review-cross-model"
+              type="checkbox"
+              checked={reviewCrossModelDraft}
+              onChange={(e) => setReviewCrossModelDraft(e.target.checked)}
+              disabled={!isAdmin || isSavingAppSettings}
+              className="mt-1"
+            />
+            <span>
+              <span className="block font-medium text-foreground">
+                Adversarial cross-model review
+              </span>
+              <span className="block text-sm text-muted-foreground">
+                Run the review agent on a different provider than the one that wrote the
+                code, using an adversarial review prompt. Users with only one connected
+                provider are unaffected (review falls back to their configured provider).
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <div className="flex justify-end">
+          <Button
+            onClick={handleSaveAppSettings}
+            disabled={!isAdmin || isSavingAppSettings || !appSettingsDirty}
+            className="h-10"
+          >
+            {isSavingAppSettings ? 'Saving...' : 'Save review settings'}
+          </Button>
+        </div>
+      </div>
+    </div>
+
     {/* Theme Settings */}
     <div className="space-y-4">
       <div className="bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
