@@ -228,6 +228,14 @@ describe('promptRenderer', () => {
       expect(out.split(resolveScriptCommand('complete-workflow.ts', 99))).toHaveLength(2);
       expect(out.split(resolveScriptCommand('block-workflow.ts', 99))).toHaveLength(2);
     });
+
+    it('appends the review completion invariant to the adversarial review prompt too', () => {
+      const out = renderPrompt('review-adversarial', { taskDocPath: '/x/y.md', taskId: 99 });
+      expect(out).toContain('Mandatory Review Completion Invariant');
+      expect(out).toContain('adversarial');
+      expect(out.split(resolveScriptCommand('complete-workflow.ts', 99))).toHaveLength(2);
+      expect(out.split(resolveScriptCommand('block-workflow.ts', 99))).toHaveLength(2);
+    });
   });
 
   describe('Global prompt injection', () => {

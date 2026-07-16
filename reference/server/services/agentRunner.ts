@@ -8,13 +8,14 @@
  * by the ConversationAdapter when streaming completes.
  */
 
-import { tasksDb, agentRunsDb, conversationsDb, projectsDb, userDb } from '../database/db.js';
+import { tasksDb, agentRunsDb, conversationsDb, projectsDb, userDb, appSettingsDb } from '../database/db.js';
 import { startConversation } from './conversationAdapter.js';
 import { updateUserBadge } from './notifications.js';
 import { buildContextPrompt, getTaskDocPath, getRecordingPath } from './documentation.js';
 import { getWorktreeProjectPath, worktreeExists, getPullRequestStatus, rebaseOnMain } from './worktree.js';
 import { getCredentialStore } from './credentials/registry.js';
 import { ProviderCredentialsMissingError } from './credentials/types.js';
+import type { AgentModelSetting } from '../../shared/types/agentModelSettings.js';
 import {
   generateImplementationMessage,
   generateReviewMessage,
@@ -25,7 +26,7 @@ import {
   generatePrAgentReviewMessage,
   generateYoloMessage,
 } from '../constants/agentPrompts.js';
-import { loadAgentModelSettings } from './agentModelSettings.js';
+import { loadAgentModelSettings, resolveReviewAgentSetting } from './agentModelSettings.js';
 import type { AgentRunRow, CreatedConversation } from '../database/db.js';
 import type {
   AgentType,
@@ -121,6 +122,32 @@ export async function startAgentRun(
   // Task doc lives in the central archive, not the worktree — survives PR merge
   const taskDocPath = getTaskDocPath(taskWithProject.project_id, taskId);
 
+  // Adversarial cross-model review decision (opt-in via `review_cross_model`).
+  // Resolved once here so the review prompt (which tells the model it did NOT
+  // write the code) and the run's actual provider stay in agreement. A real
+  // cross-provider review only happens when an alternate connected provider
+  // exists; single-provider users fall back to their configured review setting
+  // and get the ordinary (non-adversarial) review prompt.
+  let reviewOverride: AgentModelSetting | null = null;
+  let reviewIsAdversarial = false;
+  if (
+    agentType === 'review' &&
+    effectiveUserId != null &&
+    appSettingsDb.getValue('review_cross_model') === 'true'
+  ) {
+    const authorProvider =
+      agentRunsDb
+        .getByTask(taskId)
+        .find((r) => r.agent_type !== 'review')?.provider ?? null;
+    reviewOverride = await resolveReviewAgentSetting(effectiveUserId, authorProvider);
+    reviewIsAdversarial = authorProvider != null && reviewOverride.provider !== authorProvider;
+    if (reviewIsAdversarial) {
+      console.log(
+        `[AgentRunner] Cross-model review: ${authorProvider} authored -> reviewing with ${reviewOverride.provider}`,
+      );
+    }
+  }
+
   // Generate message based on agent type
   let message: string;
   switch (agentType) {
@@ -137,7 +164,7 @@ export async function startAgentRun(
       message = await generateImplementationMessage(taskDocPath, taskId);
       break;
     case 'review':
-      message = await generateReviewMessage(taskDocPath, taskId);
+      message = await generateReviewMessage(taskDocPath, taskId, reviewIsAdversarial);
       break;
     case 'refinement':
       message = await generateRefinementMessage(taskDocPath, taskId);
@@ -211,7 +238,10 @@ export async function startAgentRun(
     throw new Error(`Cannot start agent run for task ${taskId}: no acting user to resolve agent model settings`);
   }
   const agentSettings = loadAgentModelSettings(effectiveUserId)[agentType];
-  const { provider, model, effort } = agentSettings;
+  let { provider, model, effort } = agentSettings;
+  if (reviewOverride) {
+    ({ provider, model, effort } = reviewOverride);
+  }
 
   // Fail closed if the user has no credentials for the configured
   // provider. Surfaces as a typed ProviderCredentialsMissingError so

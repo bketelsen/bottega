@@ -17,12 +17,14 @@ import type {
 const DEFAULTS: AppSettings = {
   internal_tool_name: 'Bottega',
   github_pr_trigger: 'bottega',
+  review_cross_model: 'false',
 };
 
 export interface AppSettingsContextValue {
   isLoaded: boolean;
   internalToolName: string;
   githubPrTrigger: string;
+  reviewCrossModel: boolean;
   refresh: () => Promise<void>;
 }
 
@@ -70,6 +72,7 @@ export const AppSettingsProvider = ({ children }: { children: ReactNode }) => {
     isLoaded,
     internalToolName: settings.internal_tool_name,
     githubPrTrigger: settings.github_pr_trigger,
+    reviewCrossModel: settings.review_cross_model === 'true',
     refresh,
   };
 

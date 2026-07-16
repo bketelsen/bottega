@@ -23,6 +23,9 @@ vi.mock('../database/db.js', () => ({
   },
   userDb: {
     getUserById: vi.fn()
+  },
+  appSettingsDb: {
+    getValue: vi.fn().mockReturnValue('false')
   }
 }));
 
@@ -90,7 +93,8 @@ vi.mock('./agentModelSettings.js', () => ({
     review: { provider: 'anthropic', model: 'opus', effort: 'high' },
     pr: { provider: 'anthropic', model: 'opus', effort: 'high' },
     yolo: { provider: 'anthropic', model: 'opus', effort: 'high' }
-  })
+  }),
+  resolveReviewAgentSetting: vi.fn()
 }));
 
 import {
@@ -101,7 +105,7 @@ import {
   forceCompleteRunningAgents
 } from './agentRunner.js';
 
-import { tasksDb, agentRunsDb, conversationsDb, projectsDb, userDb } from '../database/db.js';
+import { tasksDb, agentRunsDb, conversationsDb, projectsDb, userDb, appSettingsDb } from '../database/db.js';
 import { startConversation } from './conversationAdapter.js';
 import { updateUserBadge } from './notifications.js';
 import { buildContextPrompt } from './documentation.js';
@@ -113,7 +117,7 @@ import {
 } from '../constants/agentPrompts.js';
 import { getWorktreeProjectPath, worktreeExists, rebaseOnMain } from './worktree.js';
 import { loadAgentModelSettings } from './agentModelSettings.js';
-
+import { resolveReviewAgentSetting } from './agentModelSettings.js';
 describe('agentRunner', () => {
   const mockTaskWithProject = {
     id: 1,
@@ -155,6 +159,7 @@ describe('agentRunner', () => {
       vi.mocked(worktreeExists).mockResolvedValue(false);
       vi.mocked(userDb.getUserById).mockReturnValue({ id: 1, username: 'test', is_technical: 1 } as never);
       vi.mocked(projectsDb.getById).mockReturnValue({ id: 1, github_repo: null } as never);
+      vi.mocked(appSettingsDb.getValue).mockReturnValue('false');
     });
 
     it('should throw error if task not found', async () => {
@@ -301,10 +306,50 @@ describe('agentRunner', () => {
     it('should create agent run and conversation for review agent', async () => {
       const result = await startAgentRun(1, 'review');
 
-      expect(generateReviewMessage).toHaveBeenCalledWith('/archive/projects/1/tasks/task-1.md', 1);
+      // Non-adversarial by default (review_cross_model flag is 'false').
+      expect(generateReviewMessage).toHaveBeenCalledWith('/archive/projects/1/tasks/task-1.md', 1, false);
       expect(agentRunsDb.create).toHaveBeenCalledWith(1, 'review', null, 'anthropic');
       expect(conversationsDb.create).toHaveBeenCalledWith(1, 'anthropic', 'opus', 'high');
       expect(result.agentRun).toEqual(mockAgentRun);
+    });
+
+    it('runs the review on a different provider (adversarial) when review_cross_model is on', async () => {
+      vi.mocked(appSettingsDb.getValue).mockReturnValue('true');
+      // The implementation run authored the code on anthropic.
+      vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+        { id: 5, task_id: 1, agent_type: 'implementation', provider: 'anthropic' } as never,
+      ]);
+      vi.mocked(resolveReviewAgentSetting).mockResolvedValue({
+        provider: 'openai',
+        model: 'gpt-current-codex',
+        effort: 'medium',
+      });
+
+      await startAgentRun(1, 'review');
+
+      expect(resolveReviewAgentSetting).toHaveBeenCalledWith(expect.any(Number), 'anthropic');
+      // Adversarial prompt + the swapped provider are both used.
+      expect(generateReviewMessage).toHaveBeenCalledWith('/archive/projects/1/tasks/task-1.md', 1, true);
+      expect(agentRunsDb.create).toHaveBeenCalledWith(1, 'review', null, 'openai');
+      expect(conversationsDb.create).toHaveBeenCalledWith(1, 'openai', 'gpt-current-codex', 'medium');
+    });
+
+    it('does not mark the review adversarial when diversity falls back to the same provider', async () => {
+      vi.mocked(appSettingsDb.getValue).mockReturnValue('true');
+      vi.mocked(agentRunsDb.getByTask).mockReturnValue([
+        { id: 5, task_id: 1, agent_type: 'implementation', provider: 'anthropic' } as never,
+      ]);
+      // Single-provider fallback: resolver returns the same (anthropic) provider.
+      vi.mocked(resolveReviewAgentSetting).mockResolvedValue({
+        provider: 'anthropic',
+        model: 'opus',
+        effort: 'high',
+      });
+
+      await startAgentRun(1, 'review');
+
+      expect(generateReviewMessage).toHaveBeenCalledWith('/archive/projects/1/tasks/task-1.md', 1, false);
+      expect(agentRunsDb.create).toHaveBeenCalledWith(1, 'review', null, 'anthropic');
     });
 
     it('should create agent run and conversation for refinement agent', async () => {

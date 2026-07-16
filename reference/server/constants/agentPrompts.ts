@@ -54,8 +54,13 @@ export async function generateImplementationMessage(
   return renderPrompt('implementation', { taskDocPath, taskId });
 }
 
-export async function generateReviewMessage(taskDocPath: string, taskId: number): Promise<string> {
-  return renderPrompt('review', { taskDocPath, taskId });
+export async function generateReviewMessage(
+  taskDocPath: string,
+  taskId: number,
+  adversarial = false,
+): Promise<string> {
+  const promptName = adversarial ? 'review-adversarial' : 'review';
+  return renderPrompt(promptName, { taskDocPath, taskId });
 }
 
 export async function generateRefinementMessage(

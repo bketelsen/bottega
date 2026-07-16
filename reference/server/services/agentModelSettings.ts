@@ -28,6 +28,8 @@ import {
   isValidAgentModelSetting,
   isAgentTypeWithSettings,
   buildSeedSettings,
+  defaultSettingForProvider,
+  type AgentModelSetting,
   type AgentModelSettings,
 } from '../../shared/types/agentModelSettings.js';
 import { isEffortForProvider } from '../../shared/providers/models.js';
@@ -174,6 +176,94 @@ export async function ensureUserAgentModelSettings(userId: number): Promise<bool
   saveAgentModelSettings(userId, seed);
   userDb.completeOnboarding(userId);
   return true;
+}
+
+/** First live (modelId, defaultEffort) for a provider, or nulls on any error. */
+async function firstLiveModel(
+  provider: Provider,
+  userId: number,
+): Promise<{ modelId: string | null; defaultEffort: string | null }> {
+  try {
+    if (provider === 'anthropic') {
+      const m = await listClaudeModels(userId);
+      return { modelId: m[0]?.id ?? null, defaultEffort: m[0]?.defaultEffort ?? null };
+    }
+    if (provider === 'openai') {
+      const m = await listCodexModels(userId);
+      return { modelId: m[0]?.id ?? null, defaultEffort: m[0]?.defaultEffort ?? null };
+    }
+    if (provider === 'opencode') {
+      const m = await listOpenCodeModels(userId);
+      return { modelId: m[0]?.id ?? null, defaultEffort: null };
+    }
+    const m = await listCopilotModels(userId);
+    return { modelId: m[0]?.id ?? null, defaultEffort: null };
+  } catch {
+    return { modelId: null, defaultEffort: null };
+  }
+}
+
+/**
+ * Resolve the (provider, model, effort) for an adversarial `review` run.
+ *
+ * When cross-model review is enabled, the reviewer must run on a provider
+ * DIFFERENT from `authorProvider` (the provider that wrote the code) so the
+ * review isn't blind to its own author's mistakes. Selection:
+ *
+ *   1. If `authorProvider` is unknown, return the user's configured review
+ *      setting unchanged (nothing to diversify against).
+ *   2. Gather the user's connected providers minus `authorProvider`. If none
+ *      remain (single-provider user), return the configured review setting —
+ *      this is the graceful fallback that keeps one-provider users working.
+ *   3. If the configured review provider already differs from the author and is
+ *      connected, keep it (respects the user's explicit choice).
+ *   4. Otherwise pick the highest-priority connected alternate, reusing a model
+ *      the user already configured for that provider, else its first live model.
+ */
+export async function resolveReviewAgentSetting(
+  userId: number,
+  authorProvider: Provider | null,
+): Promise<AgentModelSetting> {
+  const settings = loadAgentModelSettings(userId);
+  const configured = settings.review;
+  if (!authorProvider) return configured;
+
+  const connectedAlternates: Provider[] = [];
+  for (const provider of SEED_PROVIDER_PRIORITY) {
+    if (provider === authorProvider) continue;
+    try {
+      const status = await getCredentialStore(provider).getStatus(userId);
+      if (status.authenticated) connectedAlternates.push(provider);
+    } catch {
+      // getStatus is non-throwing for core providers; be defensive anyway.
+    }
+  }
+  if (connectedAlternates.length === 0) return configured;
+
+  // Respect an explicit, already-diverse, still-connected review choice.
+  if (
+    configured.provider !== authorProvider &&
+    connectedAlternates.includes(configured.provider)
+  ) {
+    return configured;
+  }
+
+  const chosen = connectedAlternates[0];
+  if (!chosen) return configured;
+
+  // Reuse a model the user already configured for the chosen provider.
+  for (const agentType of AGENT_TYPES_WITH_SETTINGS) {
+    const s = settings[agentType];
+    if (s.provider === chosen) {
+      return { provider: chosen, model: s.model, effort: s.effort };
+    }
+  }
+
+  const { modelId, defaultEffort } = await firstLiveModel(chosen, userId);
+  const fallback = defaultSettingForProvider(chosen, modelId, defaultEffort);
+  // No live model id for the alternate — fall back to the configured review
+  // setting rather than starting a run with no model.
+  return fallback ?? configured;
 }
 
 /**

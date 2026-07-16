@@ -205,6 +205,13 @@ const PROMPT_DEFINITIONS: PromptDefinition[] = [
     variables: ['taskDocPath', 'taskId'],
   },
   {
+    name: 'review-adversarial',
+    label: 'Review (adversarial cross-model)',
+    kind: 'prompt',
+    file: 'review-adversarial.md',
+    variables: ['taskDocPath', 'taskId'],
+  },
+  {
     name: 'refinement',
     label: 'Refinement',
     kind: 'prompt',
@@ -396,7 +403,7 @@ export function renderPrompt(name: string, vars: Record<string, unknown>): strin
   let body: string;
   if (PLANNING_PROMPTS.has(name)) {
     body = `${rendered.trimEnd()}${planningCompletionInvariant(vars.completePlanCommand)}\n`;
-  } else if (name === 'review') {
+  } else if (name === 'review' || name === 'review-adversarial') {
     body = `${rendered.trimEnd()}${reviewCompletionInvariant(vars.taskId)}\n`;
   } else if (SERVER_OWNED_PUBLICATION_PROMPTS.has(name)) {
     body = `${rendered.trimEnd()}${serverOwnedPublicationInvariant(name, vars.taskId)}\n`;
