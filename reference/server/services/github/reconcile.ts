@@ -19,6 +19,8 @@ import {
   type GitHubPullRequest,
   type GitHubReview,
   normalizeGitHubRepo,
+  isTransientGitHubError,
+  summarizeGitHubError,
 } from './client.js';
 import { githubIdentity, isBottegaComment } from './identity.js';
 import { recoverPrAgentRunFinalizations } from './finalize.js';
@@ -573,7 +575,13 @@ export async function reconcileRepository(projectId: number): Promise<void> {
       if (approved) await reconcileApprovedIssue(projectId, issue.number, refinement ? undefined : issue);
     } catch (error) {
       if (isRateLimitError(error)) throw error;
-      console.error(`[GitHubReconcile] Issue #${issue.number} scan failed:`, error);
+      // Transient GitHub failures (5xx/incident, network) are expected and self-heal
+      // on the next cycle — log a one-liner instead of the full stack + HTML body.
+      if (isTransientGitHubError(error)) {
+        console.warn(`[GitHubReconcile] Issue #${issue.number} scan skipped (transient): ${summarizeGitHubError(error)}`);
+      } else {
+        console.error(`[GitHubReconcile] Issue #${issue.number} scan failed:`, error);
+      }
     }
   }
 
@@ -598,7 +606,11 @@ export async function reconcileRepository(projectId: number): Promise<void> {
       if (state === 'closed') openNumbers.delete(prNumber);
     } catch (error) {
       if (isRateLimitError(error)) throw error;
-      console.error(`[GitHubReconcile] PR #${prNumber} scan failed:`, error);
+      if (isTransientGitHubError(error)) {
+        console.warn(`[GitHubReconcile] PR #${prNumber} scan skipped (transient): ${summarizeGitHubError(error)}`);
+      } else {
+        console.error(`[GitHubReconcile] PR #${prNumber} scan failed:`, error);
+      }
     }
   }
 }

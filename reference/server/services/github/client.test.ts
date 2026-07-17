@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { GitHubCapabilityError, type GitHubProject } from './capabilities.js';
-import { GitHubClient, GitHubClientError, normalizeGitHubRepo } from './client.js';
+import { GitHubClient, GitHubClientError, normalizeGitHubRepo, isTransientGitHubError, summarizeGitHubError } from './client.js';
 
 function project(tier: GitHubProject['autonomy_tier'] = 'automerge'): GitHubProject {
   return {
@@ -23,6 +23,36 @@ function project(tier: GitHubProject['autonomy_tier'] = 'automerge'): GitHubProj
 }
 
 const ok = (value: unknown) => ({ stdout: JSON.stringify(value), stderr: '' });
+
+describe('isTransientGitHubError / summarizeGitHubError', () => {
+  it('classifies transient and rate_limited as transient, others not', () => {
+    const base = { endpoint: 'repos/o/r/pulls/1', retryable: true };
+    expect(isTransientGitHubError(new GitHubClientError('x', 'transient', base))).toBe(true);
+    expect(isTransientGitHubError(new GitHubClientError('x', 'rate_limited', base))).toBe(true);
+    expect(isTransientGitHubError(new GitHubClientError('x', 'command_failed', base))).toBe(false);
+    expect(isTransientGitHubError(new Error('nope'))).toBe(false);
+  });
+
+  it('summarizes without dumping stack/HTML body', () => {
+    const err = new GitHubClientError('GitHub request failed for repos/o/r/pulls/1', 'transient', {
+      endpoint: 'repos/o/r/pulls/1',
+      status: 503,
+      attempt: 3,
+      retryable: true,
+      stderr: '<!DOCTYPE html> ... Unicorn ... huge body',
+      cause: new Error('Command failed: gh api ...'),
+    });
+    const summary = summarizeGitHubError(err);
+    expect(summary).toBe('GitHubClientError(transient status=503 repos/o/r/pulls/1 attempt=3)');
+    expect(summary).not.toContain('DOCTYPE');
+    expect(summary).not.toContain('Unicorn');
+  });
+
+  it('falls back to the message for non-GitHub errors', () => {
+    expect(summarizeGitHubError(new Error('boom'))).toBe('boom');
+    expect(summarizeGitHubError('plain string')).toBe('plain string');
+  });
+});
 
 describe('normalizeGitHubRepo', () => {
   it.each([

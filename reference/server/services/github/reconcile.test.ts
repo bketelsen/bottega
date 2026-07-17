@@ -23,6 +23,11 @@ vi.mock('./capabilities.js', () => ({ can: vi.fn().mockReturnValue(true) }));
 vi.mock('./finalize.js', () => ({ recoverPrAgentRunFinalizations: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./client.js', () => ({
   normalizeGitHubRepo: (value: string) => value.toLowerCase(),
+  isTransientGitHubError: (error: unknown) => {
+    const kind = (error as { kind?: unknown } | null)?.kind;
+    return kind === 'transient' || kind === 'rate_limited';
+  },
+  summarizeGitHubError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
   githubClient: {
     getAuthMode: vi.fn().mockReturnValue('host'),
     getAppIdentity: vi.fn(),
