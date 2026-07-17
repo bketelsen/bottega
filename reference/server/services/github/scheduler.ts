@@ -1,5 +1,6 @@
 import { projectsDb } from '../../database/db.js';
 import { reconcileRepository } from './reconcile.js';
+import { isTransientGitHubError, summarizeGitHubError } from './client.js';
 
 interface SchedulableProject {
   id: number;
@@ -61,8 +62,14 @@ export class GitHubRecoveryScheduler {
 
         const run = this.reconcile(project.id)
           .catch((error: unknown) => {
-            const message = error instanceof Error ? error.message : String(error);
-            console.error(`[GitHub Scheduler] Project ${project.id} scan failed:`, message);
+            if (isTransientGitHubError(error)) {
+              console.warn(
+                `[GitHub Scheduler] Project ${project.id} scan skipped (transient): ${summarizeGitHubError(error)}`,
+              );
+            } else {
+              const message = error instanceof Error ? error.message : String(error);
+              console.error(`[GitHub Scheduler] Project ${project.id} scan failed:`, message);
+            }
           })
           .finally(() => this.inFlight.delete(project.id));
         this.inFlight.set(project.id, run);

@@ -12,6 +12,7 @@ import {
   isBottegaComment,
 } from './github/identity.js';
 import { hasGitHubPrTriggerMention } from './github/trigger.js';
+import { isTransientGitHubError, summarizeGitHubError } from './github/client.js';
 import { invalidateInstallation } from './github/appAuth.js';
 import {
   isSupportedGitHubEvent,
@@ -241,8 +242,14 @@ export function queueGitHubWebhook(delivery: GitHubWebhookDelivery): boolean {
   const work = new Promise<void>((resolve) => setImmediate(resolve))
     .then(() => dispatchGitHubWebhook(delivery))
     .catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[Webhook] ${delivery.event} reconciliation failed for ${String(repository)}:`, message);
+      if (isTransientGitHubError(error)) {
+        console.warn(
+          `[Webhook] ${delivery.event} reconciliation skipped (transient) for ${String(repository)}: ${summarizeGitHubError(error)}`,
+        );
+      } else {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[Webhook] ${delivery.event} reconciliation failed for ${String(repository)}:`, message);
+      }
     })
     .finally(() => pendingWebhooks.delete(work));
   pendingWebhooks.add(work);

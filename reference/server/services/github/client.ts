@@ -187,6 +187,32 @@ export class GitHubClientError extends Error {
   }
 }
 
+/** True for retryable GitHub failures — transient 5xx/network, or rate limiting. */
+export function isTransientGitHubError(error: unknown): boolean {
+  return (
+    error instanceof GitHubClientError &&
+    (error.kind === 'transient' || error.kind === 'rate_limited')
+  );
+}
+
+/**
+ * One-line summary of a GitHub failure for logs. Avoids dumping the full stack
+ * and the (often huge) HTML error body GitHub returns on 5xx/incident pages.
+ */
+export function summarizeGitHubError(error: unknown): string {
+  if (error instanceof GitHubClientError) {
+    const parts: string[] = [error.kind];
+    if (error.details.status !== undefined) parts.push(`status=${error.details.status}`);
+    if (error.details.endpoint) parts.push(error.details.endpoint);
+    if (error.details.attempt) parts.push(`attempt=${error.details.attempt}`);
+    if (error.details.rateLimitResetAt) {
+      parts.push(`resetAt=${new Date(error.details.rateLimitResetAt).toISOString()}`);
+    }
+    return `GitHubClientError(${parts.join(' ')})`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 type CommandRunner = (
   command: string,
   args: readonly string[],
